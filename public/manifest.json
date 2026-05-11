@@ -1,0 +1,28 @@
+{
+  "name": "Vigga",
+  "short_name": "Vigga",
+  "description": "O suporte da sua vida financeira.",
+  "theme_color": "#0B1016",
+  "background_color": "#0B1016",
+  "display": "standalone",
+  "orientation": "portrait",
+  "start_url": "/",
+  "scope": "/",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    }
+  ]
+}
