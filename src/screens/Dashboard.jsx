@@ -126,9 +126,9 @@ function Dashboard() {
       subtitle: "Maior lançamento",
     },
     {
-      title: "Base real",
-      value: isLoading ? "..." : "Supabase",
-      subtitle: "Dados conectados",
+      title: "Organização",
+      value: isLoading ? "..." : "Ativa",
+      subtitle: "Dados em tempo real",
     },
   ];
 
@@ -170,7 +170,7 @@ function Dashboard() {
             <div className="h-2 w-2 rounded-full bg-viggaGreen" />
 
             <span className="text-xs text-viggaText">
-              Dados reais conectados ao Supabase
+              Atualizado em tempo real
             </span>
           </div>
 
