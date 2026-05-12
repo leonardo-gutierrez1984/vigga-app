@@ -21,7 +21,7 @@ const items = [
   {
     to: "/bills",
     icon: Calendar,
-    label: "Contas",
+    label: "Vencimentos",
   },
   {
     to: "/insights",

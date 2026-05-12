@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 
 import Dashboard from "./screens/Dashboard";
@@ -7,7 +7,16 @@ import Launch from "./screens/Launch";
 import Cards from "./screens/Cards";
 import Bills from "./screens/Bills";
 import Insights from "./screens/Insights";
+import Details from "./screens/Details";
+import Login from "./screens/Login";
+import Register from "./screens/Register";
+import Household from "./screens/Household";
 
+import { AuthProvider, useAuth } from "./contexts/AuthContext";
+
+// ─────────────────────────────────────────────
+// SPLASH SCREEN
+// ─────────────────────────────────────────────
 function SplashScreen() {
   return (
     <motion.div
@@ -29,11 +38,9 @@ function SplashScreen() {
             className="h-20 w-20 rounded-[1.5rem]"
           />
         </div>
-
         <h1 className="mt-6 text-3xl font-semibold tracking-[0.25em] text-viggaGold">
           VIGGA
         </h1>
-
         <p className="mt-3 text-sm text-viggaMuted">
           O suporte da sua vida financeira.
         </p>
@@ -42,32 +49,105 @@ function SplashScreen() {
   );
 }
 
-function App() {
+// ─────────────────────────────────────────────
+// ROTAS (usa o contexto de auth)
+// ─────────────────────────────────────────────
+function AppRoutes() {
+  const { session, profile, isLoading } = useAuth();
   const [showSplash, setShowSplash] = useState(true);
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setShowSplash(false);
-    }, 1800);
-
+    const timer = setTimeout(() => setShowSplash(false), 1800);
     return () => clearTimeout(timer);
   }, []);
 
+  if (isLoading) return <div className="min-h-screen bg-viggaBg" />;
+
+  const isLoggedIn = !!session;
+  const hasHousehold = !!profile?.household_id;
+
+  return (
+    <>
+      <AnimatePresence>{showSplash && <SplashScreen />}</AnimatePresence>
+
+      <Routes>
+        {/* PÚBLICAS */}
+        <Route
+          path="/login"
+          element={!isLoggedIn ? <Login /> : <Navigate to="/" replace />}
+        />
+        <Route
+          path="/register"
+          element={!isLoggedIn ? <Register /> : <Navigate to="/" replace />}
+        />
+
+        {/* GRUPO FAMILIAR */}
+        <Route
+          path="/household"
+          element={
+            !isLoggedIn ? (
+              <Navigate to="/login" replace />
+            ) : hasHousehold ? (
+              <Navigate to="/" replace />
+            ) : (
+              <Household />
+            )
+          }
+        />
+
+        {/* PRIVADAS */}
+        <Route
+          path="/"
+          element={
+            !isLoggedIn ? (
+              <Navigate to="/login" replace />
+            ) : !hasHousehold ? (
+              <Navigate to="/household" replace />
+            ) : (
+              <Dashboard />
+            )
+          }
+        />
+        <Route
+          path="/launch"
+          element={!isLoggedIn ? <Navigate to="/login" replace /> : <Launch />}
+        />
+        <Route
+          path="/cards"
+          element={!isLoggedIn ? <Navigate to="/login" replace /> : <Cards />}
+        />
+        <Route
+          path="/bills"
+          element={!isLoggedIn ? <Navigate to="/login" replace /> : <Bills />}
+        />
+        <Route
+          path="/insights"
+          element={
+            !isLoggedIn ? <Navigate to="/login" replace /> : <Insights />
+          }
+        />
+        <Route
+          path="/details"
+          element={!isLoggedIn ? <Navigate to="/login" replace /> : <Details />}
+        />
+      </Routes>
+    </>
+  );
+}
+
+// ─────────────────────────────────────────────
+// APP
+// ─────────────────────────────────────────────
+function App() {
   return (
     <BrowserRouter>
-      <main className="min-h-screen bg-viggaBg text-viggaText">
-        <div className="mx-auto min-h-screen max-w-[430px] bg-viggaBg">
-          <AnimatePresence>{showSplash && <SplashScreen />}</AnimatePresence>
-
-          <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/launch" element={<Launch />} />
-            <Route path="/cards" element={<Cards />} />
-            <Route path="/bills" element={<Bills />} />
-            <Route path="/insights" element={<Insights />} />
-          </Routes>
-        </div>
-      </main>
+      <AuthProvider>
+        <main className="min-h-screen bg-viggaBg text-viggaText">
+          <div className="mx-auto min-h-screen max-w-[430px] bg-viggaBg">
+            <AppRoutes />
+          </div>
+        </main>
+      </AuthProvider>
     </BrowserRouter>
   );
 }
