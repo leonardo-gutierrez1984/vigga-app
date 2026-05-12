@@ -1,15 +1,8 @@
 import React, { useEffect, useState, useMemo } from "react";
 import { supabase } from "../lib/supabase";
 import {
-  Mic,
-  Send,
-  CheckCircle2,
-  Loader2,
-  History,
-  X,
-  Pencil,
-  Trash2,
-  Save,
+  Mic, Send, CheckCircle2, Loader2, History,
+  X, Pencil, Trash2, Save, RefreshCw,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ui } from "../styles/ui";
@@ -17,6 +10,29 @@ import BottomNav from "../components/BottomNav";
 import FilterBar from "../components/FilterBar";
 import { applyTransactionFilters } from "../utils/filterUtils";
 import { useAuth } from "../contexts/AuthContext";
+
+// ─────────────────────────────────────────────
+// CATEGORIAS
+// ─────────────────────────────────────────────
+const CATEGORIES = [
+  "Assinaturas",
+  "Casa",
+  "Combustível",
+  "Contas",
+  "Delivery",
+  "Escola",
+  "Farmácia",
+  "Geral",
+  "Lazer",
+  "Mercado",
+  "Outros",
+  "Pets",
+  "Plano de Saúde",
+  "Atividade Física",
+  "Viagens",
+];
+
+const PAYMENT_METHODS = ["Pix", "Crédito", "Dinheiro", "Não identificado"];
 
 // ─────────────────────────────────────────────
 // ESTADO INICIAL DOS FILTROS
@@ -40,6 +56,7 @@ const Launch = () => {
   const [selectedTransaction, setSelectedTransaction] = useState(null);
   const [isEditing, setIsEditing] = useState(false);
   const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [isDeletingTransaction, setIsDeletingTransaction] = useState(false);
 
   const [editDescription, setEditDescription] = useState("");
   const [editAmount, setEditAmount] = useState("");
@@ -47,14 +64,18 @@ const Launch = () => {
   const [editPaymentMethod, setEditPaymentMethod] = useState("");
   const [editDate, setEditDate] = useState("");
 
+  // ── MODAL DE RECORRÊNCIA ─────────────────────
+  const [showRecurrenceModal, setShowRecurrenceModal] = useState(false);
+  const [pendingLaunch, setPendingLaunch] = useState(null);
+  const [recurrencePayment, setRecurrencePayment] = useState("Pix");
+  const [isSavingRecurrence, setIsSavingRecurrence] = useState(false);
+
   // ── FILTROS ──────────────────────────────────
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
 
   // ─────────────────────────────────────────────
   // BUSCA NO SUPABASE
   // ─────────────────────────────────────────────
-  // Quando há filtros ativos, buscamos mais registros para filtrar localmente.
-  // Quando não há filtros, mostramos os 5 mais recentes (comportamento original).
   const hasActiveFilters = useMemo(() => {
     return (
       filters.search.trim() ||
@@ -67,15 +88,12 @@ const Launch = () => {
   async function fetchTransactions() {
     try {
       setLoadingTransactions(true);
-
       const query = supabase
         .from("transactions")
         .select("*")
         .eq("household_id", householdId)
         .order("created_at", { ascending: false });
 
-      // Com filtros ativos: busca mais registros para filtrar localmente
-      // Sem filtros: comportamento original (últimos 5)
       if (hasActiveFilters) {
         query.limit(200);
       } else {
@@ -83,12 +101,7 @@ const Launch = () => {
       }
 
       const { data, error } = await query;
-
-      if (error) {
-        console.error("Erro ao buscar lançamentos:", error);
-        return;
-      }
-
+      if (error) { console.error("Erro ao buscar lançamentos:", error); return; }
       setTransactions(data || []);
     } catch (err) {
       console.error("Erro inesperado ao buscar lançamentos:", err);
@@ -99,13 +112,13 @@ const Launch = () => {
 
   useEffect(() => {
     fetchTransactions();
-  }, [hasActiveFilters]); // re-busca quando muda entre "com filtros" e "sem filtros"
+  }, [hasActiveFilters]);
 
   // ─────────────────────────────────────────────
   // FILTRAGEM LOCAL
   // ─────────────────────────────────────────────
   const filteredTransactions = useMemo(() => {
-    if (!hasActiveFilters) return transactions; // sem filtros = exibe direto
+    if (!hasActiveFilters) return transactions;
     return applyTransactionFilters(transactions, filters);
   }, [transactions, filters, hasActiveFilters]);
 
@@ -129,7 +142,7 @@ const Launch = () => {
   }
 
   // ─────────────────────────────────────────────
-  // MODAL
+  // MODAL DE DETALHES
   // ─────────────────────────────────────────────
   function openTransactionDetails(transaction) {
     setSelectedTransaction(transaction);
@@ -152,47 +165,62 @@ const Launch = () => {
   function parseLaunchText(text) {
     const normalizedText = text.toLowerCase().trim();
 
-    const amountMatch = normalizedText.match(/\d+([,.]\d{1,2})?/);
-    const amount = amountMatch
-      ? parseFloat(amountMatch[0].replace(",", "."))
-      : 0;
+    // VALOR
+    const amountMatch = normalizedText.match(/\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?|\d+/);
+    const amount = amountMatch ? parseFloat(amountMatch[0].replace(",", ".")) : 0;
 
+    // CATEGORIA
     let category = "Geral";
-    if (/mercado|supermercado|condor/i.test(normalizedText))
-      category = "Mercado";
-    if (/ifood|delivery|lanche/i.test(normalizedText)) category = "Delivery";
-    if (/combustível|combustivel|gasolina|posto/i.test(normalizedText))
-      category = "Combustível";
-    if (/farmacia|farmácia|remedio|remédio|medicamento/i.test(normalizedText))
-      category = "Farmácia";
-    if (
-      /netflix|spotify|assinatura|mensalidade|plano|academia|internet|telefone|celular/i.test(
-        normalizedText,
-      )
-    )
-      category = "Recorrente";
+    if (/mercado|supermercado|condor/i.test(normalizedText)) category = "Mercado";
+    if (/ifood|rappi|delivery|lanche|hamburguer|pizza/i.test(normalizedText)) category = "Delivery";
+    if (/combustível|combustivel|gasolina|posto|etanol/i.test(normalizedText)) category = "Combustível";
+    if (/farmacia|farmácia|remedio|remédio|medicamento|drogaria/i.test(normalizedText)) category = "Farmácia";
+    if (/netflix|spotify|disney|prime|youtube|assinatura/i.test(normalizedText)) category = "Assinaturas";
+    if (/mensalidade|escola|faculdade|curso|colegio|colégio/i.test(normalizedText)) category = "Escola";
+    if (/academia|ginástica|ginastica|natação|natacao|crossfit|atividade/i.test(normalizedText)) category = "Atividade Física";
+    if (/unimed|plano de saúde|plano saude|convenio|convênio|medico|médico/i.test(normalizedText)) category = "Plano de Saúde";
+    if (/luz|água|agua|internet|telefone|celular|conta de/i.test(normalizedText)) category = "Contas";
+    if (/aluguel|condominio|condomínio|reforma|casa|merceria/i.test(normalizedText)) category = "Casa";
+    if (/cinema|teatro|show|ingresso|lazer|parque/i.test(normalizedText)) category = "Lazer";
+    if (/pet|petshop|ração|racao|veterinario|veterinário/i.test(normalizedText)) category = "Pets";
+    if (/viagem|hotel|passagem|airbnb|hostel/i.test(normalizedText)) category = "Viagens";
 
+    // FORMA DE PAGAMENTO
     let paymentMethod = "Não identificado";
     if (/pix/i.test(normalizedText)) paymentMethod = "Pix";
-    if (/cartão|cartao|credito|crédito/i.test(normalizedText))
-      paymentMethod = "Crédito";
+    if (/cartão|cartao|credito|crédito/i.test(normalizedText)) paymentMethod = "Crédito";
     if (/dinheiro/i.test(normalizedText)) paymentMethod = "Dinheiro";
 
+    // DATA — detecta padrões como 15/05, 10/05/2025, ontem, hoje
     let transactionDate = new Date();
-    if (/ontem/i.test(normalizedText))
+    let detectedDate = null;
+
+    if (/ontem/i.test(normalizedText)) {
       transactionDate.setDate(transactionDate.getDate() - 1);
+    }
+
+    // Detecta data no formato dd/mm ou dd/mm/yyyy
+    const dateMatch = normalizedText.match(/(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?/);
+    if (dateMatch) {
+      const day = parseInt(dateMatch[1]);
+      const month = parseInt(dateMatch[2]) - 1;
+      const year = dateMatch[3]
+        ? (dateMatch[3].length === 2 ? 2000 + parseInt(dateMatch[3]) : parseInt(dateMatch[3]))
+        : new Date().getFullYear();
+      transactionDate = new Date(year, month, day);
+      detectedDate = true;
+    }
+
     const formattedDate = transactionDate.toISOString().split("T")[0];
 
+    // LIMPEZA DA DESCRIÇÃO
     let cleanDescription = normalizedText;
-    cleanDescription = cleanDescription.replace(/\d+([,.]\d{1,2})?/g, "");
-    cleanDescription = cleanDescription.replace(
-      /\bpix\b|\bcartão\b|\bcartao\b|\bcredito\b|\bcrédito\b|\bdinheiro\b/g,
-      "",
-    );
+    cleanDescription = cleanDescription.replace(/\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?|\d+/g, "");
+    cleanDescription = cleanDescription.replace(/\bpix\b|\bcartão\b|\bcartao\b|\bcredito\b|\bcrédito\b|\bdinheiro\b/g, "");
     cleanDescription = cleanDescription.replace(/\bontem\b|\bhoje\b/g, "");
+    cleanDescription = cleanDescription.replace(/\d{1,2}\/\d{1,2}(?:\/\d{2,4})?/g, "");
     cleanDescription = cleanDescription.replace(/\s+/g, " ").trim();
-    cleanDescription =
-      cleanDescription.charAt(0).toUpperCase() + cleanDescription.slice(1);
+    cleanDescription = cleanDescription.charAt(0).toUpperCase() + cleanDescription.slice(1);
 
     return {
       description: cleanDescription || "Lançamento",
@@ -203,6 +231,7 @@ const Launch = () => {
       transaction_date: formattedDate,
       source: "manual",
       notes: null,
+      detectedDate, // sinaliza se teve data no texto
     };
   }
 
@@ -211,26 +240,22 @@ const Launch = () => {
   // ─────────────────────────────────────────────
   async function handleRegister() {
     if (!input.trim() || isAnalyzing) return;
+
     try {
       setIsAnalyzing(true);
-      const parsedLaunch = {
-        ...parseLaunchText(input),
-        household_id: householdId,
-      };
-      const { data, error } = await supabase
-        .from("transactions")
-        .insert([parsedLaunch])
-        .select();
+      const parsed = parseLaunchText(input);
 
-      if (error) {
-        console.error("Erro ao salvar lançamento:", error);
+      // Se detectou data no texto → pergunta se é recorrente
+      if (parsed.detectedDate) {
+        setPendingLaunch(parsed);
+        setRecurrencePayment(parsed.payment_method !== "Não identificado" ? parsed.payment_method : "Pix");
+        setShowRecurrenceModal(true);
+        setIsAnalyzing(false);
         return;
       }
 
-      setLastSaved(data?.[0] || parsedLaunch);
-      setInput("");
-      await fetchTransactions();
-      setTimeout(() => setLastSaved(null), 3000);
+      // Sem data → lança direto
+      await saveLaunch(parsed);
     } catch (err) {
       console.error("Erro inesperado ao registrar lançamento:", err);
     } finally {
@@ -238,19 +263,83 @@ const Launch = () => {
     }
   }
 
+  async function saveLaunch(parsed) {
+    const { detectedDate, ...launchData } = parsed;
+    const { data, error } = await supabase
+      .from("transactions")
+      .insert([{ ...launchData, household_id: householdId }])
+      .select();
+
+    if (error) { console.error("Erro ao salvar lançamento:", error); return; }
+
+    setLastSaved(data?.[0] || launchData);
+    setInput("");
+    await fetchTransactions();
+    setTimeout(() => setLastSaved(null), 3000);
+  }
+
+  // ─────────────────────────────────────────────
+  // SALVAR SEM RECORRÊNCIA (lança só a transação)
+  // ─────────────────────────────────────────────
+  async function handleSaveWithoutRecurrence() {
+    if (!pendingLaunch) return;
+    try {
+      setIsSavingRecurrence(true);
+      await saveLaunch(pendingLaunch);
+      setShowRecurrenceModal(false);
+      setPendingLaunch(null);
+    } finally {
+      setIsSavingRecurrence(false);
+    }
+  }
+
+  // ─────────────────────────────────────────────
+  // SALVAR COM RECORRÊNCIA (lança transação + vencimento)
+  // ─────────────────────────────────────────────
+  async function handleSaveWithRecurrence() {
+    if (!pendingLaunch) return;
+    try {
+      setIsSavingRecurrence(true);
+
+      const launchWithPayment = {
+        ...pendingLaunch,
+        payment_method: recurrencePayment,
+      };
+
+      // Salva a transação
+      await saveLaunch(launchWithPayment);
+
+      // Salva o vencimento recorrente
+      const { error: billError } = await supabase.from("bills").insert([{
+        name: pendingLaunch.description,
+        amount: pendingLaunch.amount,
+        due_date: pendingLaunch.transaction_date,
+        status: "paid", // já foi pago (estamos lançando agora)
+        recurrence: "monthly",
+        payment_method: recurrencePayment,
+        household_id: householdId,
+      }]);
+
+      if (billError) console.error("Erro ao salvar vencimento:", billError);
+
+      setShowRecurrenceModal(false);
+      setPendingLaunch(null);
+    } catch (err) {
+      console.error("Erro ao salvar com recorrência:", err);
+    } finally {
+      setIsSavingRecurrence(false);
+    }
+  }
+
   // ─────────────────────────────────────────────
   // SALVAR EDIÇÃO
   // ─────────────────────────────────────────────
   async function handleSaveEdit() {
-    if (!selectedTransaction) return;
-    if (!editDescription.trim()) return;
-    if (!editAmount.trim()) return;
+    if (!selectedTransaction || !editDescription.trim() || !editAmount.trim()) return;
 
     try {
       setIsSavingEdit(true);
-      const parsedAmount = Number(
-        editAmount.replace(",", ".").replace(/[^\d.]/g, ""),
-      );
+      const parsedAmount = Number(editAmount.replace(",", ".").replace(/[^\d.]/g, ""));
 
       const { data, error } = await supabase
         .from("transactions")
@@ -264,10 +353,7 @@ const Launch = () => {
         .eq("id", selectedTransaction.id)
         .select();
 
-      if (error) {
-        console.error("Erro ao editar lançamento:", error);
-        return;
-      }
+      if (error) { console.error("Erro ao editar lançamento:", error); return; }
 
       const updatedTransaction = data?.[0];
       if (updatedTransaction) setSelectedTransaction(updatedTransaction);
@@ -282,6 +368,31 @@ const Launch = () => {
   }
 
   // ─────────────────────────────────────────────
+  // EXCLUIR
+  // ─────────────────────────────────────────────
+  async function handleDeleteTransaction() {
+    if (!selectedTransaction) return;
+
+    try {
+      setIsDeletingTransaction(true);
+
+      const { error } = await supabase
+        .from("transactions")
+        .delete()
+        .eq("id", selectedTransaction.id);
+
+      if (error) { console.error("Erro ao excluir lançamento:", error); return; }
+
+      closeTransactionDetails();
+      await fetchTransactions();
+    } catch (err) {
+      console.error("Erro inesperado ao excluir:", err);
+    } finally {
+      setIsDeletingTransaction(false);
+    }
+  }
+
+  // ─────────────────────────────────────────────
   // RENDER
   // ─────────────────────────────────────────────
   return (
@@ -292,11 +403,11 @@ const Launch = () => {
       </header>
 
       <div className="space-y-6">
-        {/* ── CARD DE INPUT ──────────────────────── */}
+        {/* CARD DE INPUT */}
         <div className={`${ui.card} border-viggaGold/10 p-5`}>
           <textarea
             className="w-full resize-none border-none bg-transparent p-0 text-lg text-viggaText placeholder:text-viggaMuted focus:ring-0"
-            placeholder="Ex: mercado 120,00 no pix..."
+            placeholder="Ex: mercado 120,00 no pix... ou netflix 55 crédito 15/05"
             rows="3"
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -335,19 +446,13 @@ const Launch = () => {
               disabled={isAnalyzing || !input.trim()}
               className={`${ui.primaryButton} flex items-center gap-2 px-6 py-2 disabled:cursor-not-allowed disabled:opacity-50`}
             >
-              {isAnalyzing ? (
-                <Loader2 className="animate-spin" size={18} />
-              ) : (
-                <Send size={18} />
-              )}
-              <span className="font-medium">
-                {isAnalyzing ? "Analisando..." : "Registrar"}
-              </span>
+              {isAnalyzing ? <Loader2 className="animate-spin" size={18} /> : <Send size={18} />}
+              <span className="font-medium">{isAnalyzing ? "Analisando..." : "Registrar"}</span>
             </button>
           </div>
         </div>
 
-        {/* ── FEEDBACK DE SUCESSO ─────────────────── */}
+        {/* FEEDBACK DE SUCESSO */}
         <AnimatePresence>
           {lastSaved && (
             <motion.div
@@ -362,7 +467,7 @@ const Launch = () => {
           )}
         </AnimatePresence>
 
-        {/* ── HISTÓRICO + FILTROS ─────────────────── */}
+        {/* HISTÓRICO + FILTROS */}
         <div className="mt-8">
           <div className="mb-4 flex items-center gap-2 px-1 text-viggaMuted">
             <History size={14} />
@@ -371,41 +476,25 @@ const Launch = () => {
             </h2>
           </div>
 
-          {/* FilterBar */}
           <div className="mb-4">
             <FilterBar
               context="launch"
               filters={filters}
               onChange={setFilters}
-              resultsCount={
-                hasActiveFilters ? filteredTransactions.length : undefined
-              }
+              resultsCount={hasActiveFilters ? filteredTransactions.length : undefined}
             />
           </div>
 
-          {/* Lista */}
           <div className="space-y-3">
             {loadingTransactions ? (
-              <div className={`${ui.card} p-5 text-sm text-viggaMuted`}>
-                Carregando lançamentos...
-              </div>
+              <div className={`${ui.card} p-5 text-sm text-viggaMuted`}>Carregando lançamentos...</div>
             ) : filteredTransactions.length === 0 ? (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className={`${ui.card} p-5 text-center`}
-              >
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className={`${ui.card} p-5 text-center`}>
                 <p className="text-sm text-viggaMuted">
-                  {hasActiveFilters
-                    ? "Nenhum lançamento encontrado para este filtro."
-                    : "Nenhum lançamento encontrado ainda."}
+                  {hasActiveFilters ? "Nenhum lançamento encontrado para este filtro." : "Nenhum lançamento encontrado ainda."}
                 </p>
                 {hasActiveFilters && (
-                  <button
-                    type="button"
-                    onClick={() => setFilters(DEFAULT_FILTERS)}
-                    className="mt-2 text-xs font-medium text-viggaGold underline underline-offset-2"
-                  >
+                  <button type="button" onClick={() => setFilters(DEFAULT_FILTERS)} className="mt-2 text-xs font-medium text-viggaGold underline underline-offset-2">
                     Limpar filtros
                   </button>
                 )}
@@ -426,8 +515,7 @@ const Launch = () => {
                       {transaction.description}
                     </p>
                     <p className="mt-1 text-[11px] font-medium uppercase tracking-wider text-viggaMuted">
-                      {transaction.category || "Geral"} •{" "}
-                      {transaction.payment_method || "Não identificado"}
+                      {transaction.category || "Geral"} • {transaction.payment_method || "Não identificado"}
                     </p>
                   </div>
                   <div className="shrink-0 text-right">
@@ -442,7 +530,91 @@ const Launch = () => {
         </div>
       </div>
 
-      {/* ── MODAL DE DETALHES ───────────────────── */}
+      {/* ── MODAL DE RECORRÊNCIA ─────────────────── */}
+      <AnimatePresence>
+        {showRecurrenceModal && pendingLaunch && (
+          <motion.div
+            className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 px-5 pb-28 backdrop-blur-sm"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+          >
+            <motion.div
+              initial={{ opacity: 0, y: 80, scale: 0.96 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 80, scale: 0.96 }}
+              transition={{ duration: 0.25 }}
+              className="w-full max-w-[430px] rounded-[2rem] border border-viggaGold/10 bg-viggaCard p-5 shadow-2xl"
+            >
+              <div className="mb-5 flex items-start justify-between gap-4">
+                <div>
+                  <p className={ui.eyebrow}>Lançamento com data</p>
+                  <h2 className="mt-1 text-xl font-semibold text-viggaText">
+                    {pendingLaunch.description}
+                  </h2>
+                  <p className="mt-1 text-sm text-viggaGold">
+                    {formatCurrency(pendingLaunch.amount)} · {formatDate(pendingLaunch.transaction_date)}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => { setShowRecurrenceModal(false); setPendingLaunch(null); }}
+                  className="flex h-10 w-10 items-center justify-center rounded-2xl border border-viggaGold/10 bg-black/20 text-viggaMuted"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {/* Forma de pagamento */}
+              <div className="mb-5">
+                <p className="mb-2 text-xs uppercase tracking-[0.18em] text-viggaMuted">Forma de pagamento</p>
+                <div className="flex flex-wrap gap-2">
+                  {["Pix", "Crédito", "Dinheiro"].map((method) => (
+                    <button
+                      key={method}
+                      type="button"
+                      onClick={() => setRecurrencePayment(method)}
+                      className={`rounded-full px-4 py-2 text-sm font-medium transition-colors ${recurrencePayment === method
+                          ? "bg-viggaGold text-black"
+                          : "border border-viggaGold/10 bg-black/20 text-viggaMuted"
+                        }`}
+                    >
+                      {method}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Pergunta de recorrência */}
+              <p className="mb-3 text-sm text-viggaMuted">Este lançamento se repete todo mês?</p>
+
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={handleSaveWithoutRecurrence}
+                  disabled={isSavingRecurrence}
+                  className="flex items-center justify-center gap-2 rounded-2xl border border-viggaGold/10 bg-viggaBrown px-4 py-3 text-sm font-medium text-viggaGold disabled:opacity-60"
+                >
+                  {isSavingRecurrence ? <Loader2 size={15} className="animate-spin" /> : null}
+                  Não, só dessa vez
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleSaveWithRecurrence}
+                  disabled={isSavingRecurrence}
+                  className="flex items-center justify-center gap-2 rounded-2xl bg-viggaGold px-4 py-3 text-sm font-medium text-black disabled:opacity-60"
+                >
+                  {isSavingRecurrence ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
+                  Sim, é recorrente
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* MODAL DE DETALHES */}
       <AnimatePresence>
         {selectedTransaction && (
           <motion.div
@@ -484,109 +656,63 @@ const Launch = () => {
 
               <div className="space-y-3">
                 <div className="rounded-2xl bg-black/20 p-4">
-                  <p className="text-xs uppercase tracking-[0.18em] text-viggaMuted">
-                    Descrição
-                  </p>
+                  <p className="text-xs uppercase tracking-[0.18em] text-viggaMuted">Descrição</p>
                   {isEditing ? (
-                    <input
-                      type="text"
-                      value={editDescription}
-                      onChange={(e) => setEditDescription(e.target.value)}
-                      className="mt-2 w-full bg-transparent text-sm text-viggaText outline-none"
-                    />
+                    <input type="text" value={editDescription} onChange={(e) => setEditDescription(e.target.value)}
+                      className="mt-2 w-full bg-transparent text-sm text-viggaText outline-none" />
                   ) : (
-                    <p className="mt-2 text-sm text-viggaText">
-                      {selectedTransaction.description}
-                    </p>
+                    <p className="mt-2 text-sm text-viggaText">{selectedTransaction.description}</p>
                   )}
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
                   <div className="rounded-2xl bg-black/20 p-4">
-                    <p className="text-xs uppercase tracking-[0.18em] text-viggaMuted">
-                      Categoria
-                    </p>
+                    <p className="text-xs uppercase tracking-[0.18em] text-viggaMuted">Categoria</p>
                     {isEditing ? (
-                      <select
-                        value={editCategory}
-                        onChange={(e) => setEditCategory(e.target.value)}
-                        className="mt-2 w-full bg-transparent text-sm text-viggaText outline-none"
-                      >
-                        <option value="Geral">Geral</option>
-                        <option value="Mercado">Mercado</option>
-                        <option value="Delivery">Delivery</option>
-                        <option value="Combustível">Combustível</option>
-                        <option value="Farmácia">Farmácia</option>
-                        <option value="Recorrente">Recorrente</option>
+                      <select value={editCategory} onChange={(e) => setEditCategory(e.target.value)}
+                        className="mt-2 w-full bg-transparent text-sm text-viggaText outline-none">
+                        {CATEGORIES.map((cat) => (
+                          <option key={cat} value={cat}>{cat}</option>
+                        ))}
                       </select>
                     ) : (
-                      <p className="mt-2 text-sm text-viggaText">
-                        {selectedTransaction.category || "Geral"}
-                      </p>
+                      <p className="mt-2 text-sm text-viggaText">{selectedTransaction.category || "Geral"}</p>
                     )}
                   </div>
 
                   <div className="rounded-2xl bg-black/20 p-4">
-                    <p className="text-xs uppercase tracking-[0.18em] text-viggaMuted">
-                      Forma
-                    </p>
+                    <p className="text-xs uppercase tracking-[0.18em] text-viggaMuted">Forma</p>
                     {isEditing ? (
-                      <select
-                        value={editPaymentMethod}
-                        onChange={(e) => setEditPaymentMethod(e.target.value)}
-                        className="mt-2 w-full bg-transparent text-sm text-viggaText outline-none"
-                      >
-                        <option value="Não identificado">
-                          Não identificado
-                        </option>
-                        <option value="Pix">Pix</option>
-                        <option value="Crédito">Crédito</option>
-                        <option value="Dinheiro">Dinheiro</option>
+                      <select value={editPaymentMethod} onChange={(e) => setEditPaymentMethod(e.target.value)}
+                        className="mt-2 w-full bg-transparent text-sm text-viggaText outline-none">
+                        {PAYMENT_METHODS.map((m) => (
+                          <option key={m} value={m}>{m}</option>
+                        ))}
                       </select>
                     ) : (
-                      <p className="mt-2 text-sm text-viggaText">
-                        {selectedTransaction.payment_method ||
-                          "Não identificado"}
-                      </p>
+                      <p className="mt-2 text-sm text-viggaText">{selectedTransaction.payment_method || "Não identificado"}</p>
                     )}
                   </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
                   <div className="rounded-2xl bg-black/20 p-4">
-                    <p className="text-xs uppercase tracking-[0.18em] text-viggaMuted">
-                      Valor
-                    </p>
+                    <p className="text-xs uppercase tracking-[0.18em] text-viggaMuted">Valor</p>
                     {isEditing ? (
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={editAmount}
-                        onChange={(e) => setEditAmount(e.target.value)}
-                        className="mt-2 w-full bg-transparent text-sm text-viggaText outline-none"
-                      />
+                      <input type="text" inputMode="decimal" value={editAmount} onChange={(e) => setEditAmount(e.target.value)}
+                        className="mt-2 w-full bg-transparent text-sm text-viggaText outline-none" />
                     ) : (
-                      <p className="mt-2 text-sm text-viggaText">
-                        {formatCurrency(selectedTransaction.amount)}
-                      </p>
+                      <p className="mt-2 text-sm text-viggaText">{formatCurrency(selectedTransaction.amount)}</p>
                     )}
                   </div>
 
                   <div className="rounded-2xl bg-black/20 p-4">
-                    <p className="text-xs uppercase tracking-[0.18em] text-viggaMuted">
-                      Data
-                    </p>
+                    <p className="text-xs uppercase tracking-[0.18em] text-viggaMuted">Data</p>
                     {isEditing ? (
-                      <input
-                        type="date"
-                        value={editDate}
-                        onChange={(e) => setEditDate(e.target.value)}
-                        className="mt-2 w-full bg-transparent text-sm text-viggaText outline-none"
-                      />
+                      <input type="date" value={editDate} onChange={(e) => setEditDate(e.target.value)}
+                        className="mt-2 w-full bg-transparent text-sm text-viggaText outline-none" />
                     ) : (
-                      <p className="mt-2 text-sm text-viggaText">
-                        {formatDate(selectedTransaction.transaction_date)}
-                      </p>
+                      <p className="mt-2 text-sm text-viggaText">{formatDate(selectedTransaction.transaction_date)}</p>
                     )}
                   </div>
                 </div>
@@ -595,48 +721,26 @@ const Launch = () => {
               <div className="mt-5 grid grid-cols-2 gap-3">
                 {isEditing ? (
                   <>
-                    <button
-                      type="button"
-                      onClick={() => setIsEditing(false)}
-                      className="flex items-center justify-center gap-2 rounded-2xl border border-viggaGold/10 bg-viggaBrown px-4 py-3 text-sm font-medium text-viggaGold"
-                    >
+                    <button type="button" onClick={() => setIsEditing(false)}
+                      className="flex items-center justify-center gap-2 rounded-2xl border border-viggaGold/10 bg-viggaBrown px-4 py-3 text-sm font-medium text-viggaGold">
                       Cancelar
                     </button>
-                    <button
-                      type="button"
-                      onClick={handleSaveEdit}
-                      disabled={isSavingEdit}
-                      className="flex items-center justify-center gap-2 rounded-2xl bg-viggaGold px-4 py-3 text-sm font-medium text-black disabled:opacity-60"
-                    >
-                      {isSavingEdit ? (
-                        <>
-                          <Loader2 size={16} className="animate-spin" />
-                          Salvando...
-                        </>
-                      ) : (
-                        <>
-                          <Save size={16} />
-                          Salvar
-                        </>
-                      )}
+                    <button type="button" onClick={handleSaveEdit} disabled={isSavingEdit}
+                      className="flex items-center justify-center gap-2 rounded-2xl bg-viggaGold px-4 py-3 text-sm font-medium text-black disabled:opacity-60">
+                      {isSavingEdit ? <><Loader2 size={16} className="animate-spin" />Salvando...</> : <><Save size={16} />Salvar</>}
                     </button>
                   </>
                 ) : (
                   <>
-                    <button
-                      type="button"
-                      onClick={() => setIsEditing(true)}
-                      className="flex items-center justify-center gap-2 rounded-2xl border border-viggaGold/10 bg-viggaBrown px-4 py-3 text-sm font-medium text-viggaGold"
-                    >
+                    <button type="button" onClick={() => setIsEditing(true)}
+                      className="flex items-center justify-center gap-2 rounded-2xl border border-viggaGold/10 bg-viggaBrown px-4 py-3 text-sm font-medium text-viggaGold">
                       <Pencil size={16} />
                       Editar
                     </button>
-                    <button
-                      type="button"
-                      className="flex items-center justify-center gap-2 rounded-2xl border border-red-400/10 bg-red-500/10 px-4 py-3 text-sm font-medium text-red-300"
-                    >
-                      <Trash2 size={16} />
-                      Excluir
+                    <button type="button" onClick={handleDeleteTransaction} disabled={isDeletingTransaction}
+                      className="flex items-center justify-center gap-2 rounded-2xl border border-red-400/10 bg-red-500/10 px-4 py-3 text-sm font-medium text-red-300 disabled:opacity-60">
+                      {isDeletingTransaction ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
+                      {isDeletingTransaction ? "Excluindo..." : "Excluir"}
                     </button>
                   </>
                 )}
