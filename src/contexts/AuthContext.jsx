@@ -1,14 +1,12 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 
-// ─────────────────────────────────────────────
-// CONTEXTO
-// ─────────────────────────────────────────────
 const AuthContext = createContext({});
 
 export function AuthProvider({ children }) {
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
+  const [household, setHousehold] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -25,6 +23,7 @@ export function AuthProvider({ children }) {
       if (session) fetchProfile(session.user.id);
       else {
         setProfile(null);
+        setHousehold(null);
         setIsLoading(false);
       }
     });
@@ -34,12 +33,23 @@ export function AuthProvider({ children }) {
 
   async function fetchProfile(userId) {
     try {
-      const { data } = await supabase
+      const { data: profileData } = await supabase
         .from("profiles")
         .select("*")
         .eq("id", userId)
         .single();
-      setProfile(data || null);
+
+      setProfile(profileData || null);
+
+      // Busca o household se o perfil tiver household_id
+      if (profileData?.household_id) {
+        const { data: householdData } = await supabase
+          .from("households")
+          .select("*")
+          .eq("id", profileData.household_id)
+          .single();
+        setHousehold(householdData || null);
+      }
     } catch (err) {
       console.error("Erro ao buscar perfil:", err);
     } finally {
@@ -51,19 +61,24 @@ export function AuthProvider({ children }) {
     await supabase.auth.signOut();
     setSession(null);
     setProfile(null);
+    setHousehold(null);
   }
+
+  const userId = session?.user?.id || null;
 
   return (
     <AuthContext.Provider
       value={{
         session,
-        profile,
+        profile: profile ? { ...profile, email: session?.user?.email } : null,
+        household,
         isLoading,
         householdId: profile?.household_id || null,
-        userId: session?.user?.id || null,
+        userId,
         userName: profile?.name || "",
+        monthlyGoal: household?.monthly_goal || 5000,
         signOut,
-        refreshProfile: () => session && fetchProfile(session.user.id),
+        refreshProfile: () => userId && fetchProfile(userId),
       }}
     >
       {children}
@@ -71,7 +86,6 @@ export function AuthProvider({ children }) {
   );
 }
 
-// Hook para usar em qualquer tela
 export function useAuth() {
   return useContext(AuthContext);
 }

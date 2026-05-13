@@ -11,12 +11,10 @@ import Details from "./screens/Details";
 import Login from "./screens/Login";
 import Register from "./screens/Register";
 import Household from "./screens/Household";
+import Profile from "./screens/Profile";
 
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 
-// ─────────────────────────────────────────────
-// SPLASH SCREEN
-// ─────────────────────────────────────────────
 function SplashScreen() {
   return (
     <motion.div
@@ -49,9 +47,6 @@ function SplashScreen() {
   );
 }
 
-// ─────────────────────────────────────────────
-// ROTAS (usa o contexto de auth)
-// ─────────────────────────────────────────────
 function AppRoutes() {
   const { session, profile, isLoading } = useAuth();
   const [showSplash, setShowSplash] = useState(true);
@@ -130,14 +125,15 @@ function AppRoutes() {
           path="/details"
           element={!isLoggedIn ? <Navigate to="/login" replace /> : <Details />}
         />
+        <Route
+          path="/profile"
+          element={!isLoggedIn ? <Navigate to="/login" replace /> : <Profile />}
+        />
       </Routes>
     </>
   );
 }
 
-// ─────────────────────────────────────────────
-// APP
-// ─────────────────────────────────────────────
 function App() {
   return (
     <BrowserRouter>

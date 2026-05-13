@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { CreditCard, Pencil, X } from "lucide-react";
-import { motion } from "framer-motion";
+import { CreditCard, Pencil, X, CheckCircle2, Loader2 } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
 
 import BottomNav from "../components/BottomNav";
 import Card from "../components/Card";
@@ -24,6 +24,7 @@ function Cards() {
   const { householdId } = useAuth();
   const [transactions, setTransactions] = useState([]);
   const [cardData, setCardData] = useState(null);
+  const [cardPayments, setCardPayments] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isEditingCard, setIsEditingCard] = useState(false);
   const [showAll, setShowAll] = useState(false);
@@ -35,13 +36,27 @@ function Cards() {
 
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
 
+  // ── MODAL PAGAR FATURA ────────────────────────
+  const [showPayInvoiceModal, setShowPayInvoiceModal] = useState(false);
+  const [paymentType, setPaymentType] = useState("total"); // "total" | "partial"
+  const [partialAmount, setPartialAmount] = useState("");
+  const [isSavingPayment, setIsSavingPayment] = useState(false);
+  const [paymentSuccess, setPaymentSuccess] = useState(false);
+
+  // ─────────────────────────────────────────────
+  // BUSCA
+  // ─────────────────────────────────────────────
   async function fetchCardData() {
     try {
       setIsLoading(true);
 
+      const now = new Date();
+      const referenceMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+
       const [
         { data: transactionsData, error: transactionsError },
         { data: cardsData, error: cardsError },
+        { data: paymentsData },
       ] = await Promise.all([
         supabase
           .from("transactions")
@@ -49,8 +64,12 @@ function Cards() {
           .eq("payment_method", "Crédito")
           .eq("household_id", householdId)
           .order("transaction_date", { ascending: false }),
-
         supabase.from("credit_cards").select("*").limit(1).single(),
+        supabase
+          .from("card_payments")
+          .select("*")
+          .eq("household_id", householdId)
+          .eq("reference_month", referenceMonth),
       ]);
 
       if (transactionsError)
@@ -59,6 +78,7 @@ function Cards() {
 
       setTransactions(transactionsData || []);
       setCardData(cardsData || null);
+      setCardPayments(paymentsData || []);
 
       if (cardsData) {
         setEditName(cardsData.name || "");
@@ -77,6 +97,9 @@ function Cards() {
     fetchCardData();
   }, []);
 
+  // ─────────────────────────────────────────────
+  // FORMATADORES
+  // ─────────────────────────────────────────────
   function formatCurrency(value) {
     return Number(value || 0).toLocaleString("pt-BR", {
       style: "currency",
@@ -92,6 +115,9 @@ function Cards() {
     });
   }
 
+  // ─────────────────────────────────────────────
+  // CÁLCULOS
+  // ─────────────────────────────────────────────
   const currentMonthCreditTransactions = useMemo(() => {
     const now = new Date();
     return transactions.filter((t) => {
@@ -116,12 +142,23 @@ function Cards() {
     return applyTransactionFilters(base, filters);
   }, [transactions, currentMonthCreditTransactions, filters, hasActiveFilters]);
 
-  const currentInvoice = useMemo(() => {
+  // Total bruto da fatura do mês
+  const grossInvoice = useMemo(() => {
     return currentMonthCreditTransactions.reduce(
       (total, t) => total + Number(t.amount || 0),
       0,
     );
   }, [currentMonthCreditTransactions]);
+
+  // Total já pago neste mês
+  const totalPaid = useMemo(() => {
+    return cardPayments.reduce((sum, p) => sum + Number(p.amount || 0), 0);
+  }, [cardPayments]);
+
+  // Fatura líquida (pendente de pagamento)
+  const currentInvoice = useMemo(() => {
+    return Math.max(grossInvoice - totalPaid, 0);
+  }, [grossInvoice, totalPaid]);
 
   const cardLimit = Number(cardData?.limit_amount || 0);
   const usedLimitPercentage =
@@ -130,6 +167,61 @@ function Cards() {
       : 0;
   const availableLimit = cardLimit - currentInvoice;
 
+  // ─────────────────────────────────────────────
+  // PAGAR FATURA
+  // ─────────────────────────────────────────────
+  async function handlePayInvoice() {
+    if (!cardData) return;
+
+    const amountToPay =
+      paymentType === "total"
+        ? currentInvoice
+        : Number(partialAmount.replace(",", ".").replace(/[^\d.]/g, ""));
+
+    if (!amountToPay || amountToPay <= 0) return;
+
+    try {
+      setIsSavingPayment(true);
+
+      const now = new Date();
+      const referenceMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+      const today = now.toISOString().split("T")[0];
+
+      const { error } = await supabase.from("card_payments").insert([
+        {
+          household_id: householdId,
+          card_id: cardData.id,
+          amount: amountToPay,
+          payment_date: today,
+          reference_month: referenceMonth,
+        },
+      ]);
+
+      if (error) {
+        console.error("Erro ao registrar pagamento:", error);
+        return;
+      }
+
+      setPaymentSuccess(true);
+      setPartialAmount("");
+      setPaymentType("total");
+
+      await fetchCardData();
+
+      setTimeout(() => {
+        setPaymentSuccess(false);
+        setShowPayInvoiceModal(false);
+      }, 2000);
+    } catch (err) {
+      console.error("Erro inesperado:", err);
+    } finally {
+      setIsSavingPayment(false);
+    }
+  }
+
+  // ─────────────────────────────────────────────
+  // SALVAR EDIÇÃO DO CARTÃO
+  // ─────────────────────────────────────────────
   async function handleSaveCard() {
     try {
       const { error } = await supabase
@@ -158,6 +250,9 @@ function Cards() {
     ? filteredTransactions
     : filteredTransactions.slice(0, INITIAL_COUNT);
 
+  // ─────────────────────────────────────────────
+  // RENDER
+  // ─────────────────────────────────────────────
   return (
     <div className="min-h-screen px-5 pb-56 pt-8">
       <header>
@@ -186,20 +281,59 @@ function Cards() {
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={() => setIsEditingCard(true)}
-            className="mt-6 flex items-center gap-2 rounded-2xl border border-viggaGold/10 bg-black/20 px-4 py-3 text-sm text-viggaGold transition-opacity hover:opacity-80"
-          >
-            <Pencil size={16} />
-            Editar cartão
-          </button>
+          {/* Botões de ação */}
+          <div className="mt-6 flex gap-2">
+            <button
+              type="button"
+              onClick={() => setIsEditingCard(true)}
+              className="flex items-center gap-2 rounded-2xl border border-viggaGold/10 bg-black/20 px-4 py-3 text-sm text-viggaGold"
+            >
+              <Pencil size={16} />
+              Editar
+            </button>
+            {currentInvoice > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowPayInvoiceModal(true)}
+                className="flex flex-1 items-center justify-center gap-2 rounded-2xl bg-viggaGold px-4 py-3 text-sm font-medium text-black"
+              >
+                <CheckCircle2 size={16} />
+                Pagar fatura
+              </button>
+            )}
+          </div>
 
-          <div className="mt-10">
+          {/* Fatura */}
+          <div className="mt-8">
             <p className={ui.eyebrow}>Fatura atual</p>
             <h3 className="mt-2 text-5xl font-semibold tracking-tight">
               {isLoading ? "..." : formatCurrency(currentInvoice)}
             </h3>
+
+            {/* Se houve pagamento parcial, mostra detalhes */}
+            {totalPaid > 0 && (
+              <div className="mt-3 rounded-2xl bg-black/20 px-4 py-3">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-viggaMuted">Total da fatura</span>
+                  <span className="text-viggaText">
+                    {formatCurrency(grossInvoice)}
+                  </span>
+                </div>
+                <div className="mt-1 flex items-center justify-between text-xs">
+                  <span className="text-viggaMuted">Já pago</span>
+                  <span className="text-viggaGreen">
+                    - {formatCurrency(totalPaid)}
+                  </span>
+                </div>
+                <div className="mt-1 flex items-center justify-between text-xs font-semibold">
+                  <span className="text-viggaMuted">Saldo pendente</span>
+                  <span className="text-viggaGold">
+                    {formatCurrency(currentInvoice)}
+                  </span>
+                </div>
+              </div>
+            )}
+
             <div className="mt-4 flex flex-wrap gap-2">
               <div className="rounded-full border border-viggaGold/10 bg-black/20 px-4 py-2 text-sm text-viggaMuted">
                 Fechamento: dia {cardData?.closing_day || "--"}
@@ -210,6 +344,7 @@ function Cards() {
             </div>
           </div>
 
+          {/* Limite */}
           <div className="mt-8">
             <div className="flex items-center justify-between">
               <p className={ui.eyebrow}>Limite utilizado</p>
@@ -222,7 +357,7 @@ function Cards() {
                 initial={{ width: 0 }}
                 animate={{ width: `${usedLimitPercentage}%` }}
                 transition={{ duration: 1 }}
-                className="h-full rounded-full bg-viggaGold"
+                className={`h-full rounded-full ${usedLimitPercentage >= 90 ? "bg-red-400" : usedLimitPercentage >= 70 ? "bg-yellow-400" : "bg-viggaGold"}`}
               />
             </div>
             <p className="mt-3 text-sm text-viggaMuted">
@@ -317,79 +452,237 @@ function Cards() {
         </div>
       </section>
 
-      {/* MODAL DE EDIÇÃO DO CARTÃO */}
-      {isEditingCard && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 px-5 pb-32 backdrop-blur-sm">
-          <div className="w-full max-w-[430px] rounded-[2rem] border border-viggaGold/10 bg-viggaCard p-6">
-            <div className="mb-6 flex items-center justify-between">
-              <div>
-                <p className={ui.eyebrow}>Configuração</p>
-                <h2 className="mt-2 text-2xl font-semibold text-viggaText">
-                  Editar cartão
-                </h2>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsEditingCard(false)}
-                className="flex h-10 w-10 items-center justify-center rounded-2xl border border-viggaGold/10 bg-black/20 text-viggaMuted"
-              >
-                <X size={18} />
-              </button>
-            </div>
+      {/* MODAL PAGAR FATURA */}
+      <AnimatePresence>
+        {showPayInvoiceModal && (
+          <motion.div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-5 backdrop-blur-sm"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => !isSavingPayment && setShowPayInvoiceModal(false)}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.96 }}
+              transition={{ duration: 0.22 }}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-[430px] rounded-[2rem] border border-viggaGold/10 bg-viggaCard p-5 shadow-2xl"
+            >
+              {paymentSuccess ? (
+                /* Tela de sucesso */
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  className="py-6 text-center"
+                >
+                  <CheckCircle2
+                    size={48}
+                    className="mx-auto mb-3 text-viggaGreen"
+                  />
+                  <h2 className="text-xl font-semibold text-viggaText">
+                    Pagamento registrado!
+                  </h2>
+                  <p className="mt-2 text-sm text-viggaMuted">
+                    Seu limite foi atualizado.
+                  </p>
+                </motion.div>
+              ) : (
+                <>
+                  <div className="mb-5 flex items-start justify-between gap-4">
+                    <div>
+                      <p className={ui.eyebrow}>Pagar fatura</p>
+                      <h2 className="mt-1 text-xl font-semibold text-viggaText">
+                        {cardData?.name}
+                      </h2>
+                      <p className="mt-1 text-sm text-viggaMuted">
+                        Fatura pendente:{" "}
+                        <span className="font-semibold text-viggaGold">
+                          {formatCurrency(currentInvoice)}
+                        </span>
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowPayInvoiceModal(false)}
+                      className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-viggaGold/10 bg-black/20 text-viggaMuted"
+                    >
+                      <X size={18} />
+                    </button>
+                  </div>
 
-            <div className="space-y-4">
-              <div>
-                <p className="mb-2 text-sm text-viggaMuted">Nome do cartão</p>
-                <input
-                  type="text"
-                  value={editName}
-                  onChange={(e) => setEditName(e.target.value)}
-                  className="w-full rounded-2xl border border-viggaGold/10 bg-black/20 px-4 py-4 text-viggaText outline-none"
-                />
-              </div>
-              <div>
-                <p className="mb-2 text-sm text-viggaMuted">Limite total</p>
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={editLimit}
-                  onChange={(e) => setEditLimit(e.target.value)}
-                  className="w-full rounded-2xl border border-viggaGold/10 bg-black/20 px-4 py-4 text-viggaText outline-none"
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
+                  {/* Tipo de pagamento */}
+                  <p className="mb-3 text-sm text-viggaMuted">
+                    Como vai pagar?
+                  </p>
+                  <div className="mb-4 flex gap-2">
+                    {[
+                      {
+                        v: "total",
+                        l: `Total (${formatCurrency(currentInvoice)})`,
+                      },
+                      { v: "partial", l: "Valor parcial" },
+                    ].map((t) => (
+                      <button
+                        key={t.v}
+                        type="button"
+                        onClick={() => setPaymentType(t.v)}
+                        className={`flex-1 rounded-2xl py-3 text-xs font-medium transition-colors ${
+                          paymentType === t.v
+                            ? "bg-viggaGold text-black"
+                            : "border border-viggaGold/10 bg-black/20 text-viggaMuted"
+                        }`}
+                      >
+                        {t.l}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Campo valor parcial */}
+                  <AnimatePresence>
+                    {paymentType === "partial" && (
+                      <motion.div
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: "auto" }}
+                        exit={{ opacity: 0, height: 0 }}
+                        className="mb-4 overflow-hidden"
+                      >
+                        <p className="mb-2 text-sm text-viggaMuted">
+                          Valor a pagar
+                        </p>
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={partialAmount}
+                          onChange={(e) => setPartialAmount(e.target.value)}
+                          placeholder="Ex: 500,00"
+                          className="w-full rounded-2xl border border-viggaGold/10 bg-black/20 px-4 py-3 text-viggaText outline-none placeholder:text-viggaMuted"
+                        />
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setShowPayInvoiceModal(false)}
+                      className="rounded-2xl border border-viggaGold/10 bg-viggaBrown py-3 text-sm font-medium text-viggaGold"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handlePayInvoice}
+                      disabled={
+                        isSavingPayment ||
+                        (paymentType === "partial" && !partialAmount.trim())
+                      }
+                      className="flex items-center justify-center gap-2 rounded-2xl bg-viggaGold py-3 text-sm font-medium text-black disabled:opacity-60"
+                    >
+                      {isSavingPayment ? (
+                        <Loader2 size={16} className="animate-spin" />
+                      ) : (
+                        <CheckCircle2 size={16} />
+                      )}
+                      {isSavingPayment ? "Salvando..." : "Confirmar"}
+                    </button>
+                  </div>
+                </>
+              )}
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* MODAL DE EDIÇÃO DO CARTÃO */}
+      <AnimatePresence>
+        {isEditingCard && (
+          <motion.div
+            className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 px-5 pb-32 backdrop-blur-sm"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setIsEditingCard(false)}
+          >
+            <motion.div
+              initial={{ opacity: 0, y: 60, scale: 0.96 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 60, scale: 0.96 }}
+              transition={{ duration: 0.22 }}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-[430px] rounded-[2rem] border border-viggaGold/10 bg-viggaCard p-6"
+            >
+              <div className="mb-6 flex items-center justify-between">
                 <div>
-                  <p className="mb-2 text-sm text-viggaMuted">Fechamento</p>
+                  <p className={ui.eyebrow}>Configuração</p>
+                  <h2 className="mt-2 text-2xl font-semibold text-viggaText">
+                    Editar cartão
+                  </h2>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsEditingCard(false)}
+                  className="flex h-10 w-10 items-center justify-center rounded-2xl border border-viggaGold/10 bg-black/20 text-viggaMuted"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <p className="mb-2 text-sm text-viggaMuted">Nome do cartão</p>
                   <input
                     type="text"
-                    inputMode="numeric"
-                    value={editClosingDay}
-                    onChange={(e) => setEditClosingDay(e.target.value)}
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
                     className="w-full rounded-2xl border border-viggaGold/10 bg-black/20 px-4 py-4 text-viggaText outline-none"
                   />
                 </div>
                 <div>
-                  <p className="mb-2 text-sm text-viggaMuted">Vencimento</p>
+                  <p className="mb-2 text-sm text-viggaMuted">Limite total</p>
                   <input
                     type="text"
-                    inputMode="numeric"
-                    value={editDueDay}
-                    onChange={(e) => setEditDueDay(e.target.value)}
+                    inputMode="decimal"
+                    value={editLimit}
+                    onChange={(e) => setEditLimit(e.target.value)}
                     className="w-full rounded-2xl border border-viggaGold/10 bg-black/20 px-4 py-4 text-viggaText outline-none"
                   />
                 </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <p className="mb-2 text-sm text-viggaMuted">Fechamento</p>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={editClosingDay}
+                      onChange={(e) => setEditClosingDay(e.target.value)}
+                      className="w-full rounded-2xl border border-viggaGold/10 bg-black/20 px-4 py-4 text-viggaText outline-none"
+                    />
+                  </div>
+                  <div>
+                    <p className="mb-2 text-sm text-viggaMuted">Vencimento</p>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={editDueDay}
+                      onChange={(e) => setEditDueDay(e.target.value)}
+                      className="w-full rounded-2xl border border-viggaGold/10 bg-black/20 px-4 py-4 text-viggaText outline-none"
+                    />
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleSaveCard}
+                  className="mt-2 w-full rounded-2xl bg-viggaGold px-5 py-4 font-medium text-black"
+                >
+                  Salvar alterações
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={handleSaveCard}
-                className="mt-2 w-full rounded-2xl bg-viggaGold px-5 py-4 font-medium text-black"
-              >
-                Salvar alterações
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <BottomNav />
     </div>

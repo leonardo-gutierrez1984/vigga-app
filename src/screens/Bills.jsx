@@ -160,14 +160,19 @@ function Bills() {
     try {
       setIsSavingPay(true);
       const newStatus = payMethod === "Crédito" ? "credit" : "paid";
+
+      // 1. Atualiza status do vencimento atual
       const { error: billError } = await supabase
         .from("bills")
         .update({ status: newStatus, payment_method: payMethod })
         .eq("id", payingBill.id);
+
       if (billError) {
         console.error("Erro ao atualizar vencimento:", billError);
         return;
       }
+
+      // 2. Cria transação real com a data de hoje
       const today = new Date().toISOString().split("T")[0];
       const { error: transactionError } = await supabase
         .from("transactions")
@@ -183,8 +188,45 @@ function Bills() {
             household_id: householdId,
           },
         ]);
+
       if (transactionError)
         console.error("Erro ao criar transação:", transactionError);
+
+      // 3. Se for recorrente, gera o próximo mês automaticamente
+      if (payingBill.recurrence === "monthly" && payingBill.due_date) {
+        const currentDue = new Date(`${payingBill.due_date}T00:00:00`);
+        const nextDue = new Date(currentDue);
+        nextDue.setMonth(nextDue.getMonth() + 1);
+        const nextDueStr = nextDue.toISOString().split("T")[0];
+
+        // Verifica se já existe vencimento para o próximo mês
+        const { data: existing } = await supabase
+          .from("bills")
+          .select("id")
+          .eq("household_id", householdId)
+          .eq("name", payingBill.name)
+          .eq("due_date", nextDueStr)
+          .single();
+
+        // Só cria se não existir ainda
+        if (!existing) {
+          const { error: nextBillError } = await supabase.from("bills").insert([
+            {
+              name: payingBill.name,
+              amount: payingBill.amount,
+              due_date: nextDueStr,
+              status: "pending",
+              recurrence: "monthly",
+              payment_method: payingBill.payment_method,
+              household_id: householdId,
+            },
+          ]);
+
+          if (nextBillError)
+            console.error("Erro ao criar próximo vencimento:", nextBillError);
+        }
+      }
+
       setShowPayModal(false);
       setPayingBill(null);
       await fetchBills();
