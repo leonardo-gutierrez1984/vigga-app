@@ -42,7 +42,6 @@ function Dashboard() {
   const [showTodayModal, setShowTodayModal] = useState(false);
   const [showAiModal, setShowAiModal] = useState(false);
 
-  // Estados da IA
   const [aiText, setAiText] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
   const [aiError, setAiError] = useState(null);
@@ -141,7 +140,6 @@ function Dashboard() {
 
   const goalsOk = goalsWithProgress.filter((g) => g.percentage < 80).length;
   const goalsTotal = goalsWithProgress.length;
-  const mesAtual = new Date().toLocaleDateString("pt-BR", { month: "long" });
 
   const quickStats = [
     {
@@ -204,9 +202,6 @@ function Dashboard() {
     return "text-viggaGreen";
   }
 
-  // ─────────────────────────────────────────────
-  // GERAR ANÁLISE COM IA
-  // ─────────────────────────────────────────────
   async function handleGenerateAI() {
     if (currentMonthTransactions.length === 0) return;
     if (abortRef.current) abortRef.current.abort();
@@ -348,28 +343,41 @@ Seja direto, use linguagem simples e amigável. Não use markdown, asteriscos ou
       >
         <Card className="relative mt-10 overflow-hidden p-6">
           <div className="absolute right-[-60px] top-[-60px] h-40 w-40 rounded-full bg-viggaGold/10 blur-3xl" />
-          <p className="text-sm text-viggaMuted">Comprometido este mês</p>
+
+          {/* ← TEXTO ALTERADO */}
+          <p className="text-sm text-viggaMuted">Gasto este mês</p>
           <h2 className="mt-3 text-5xl font-semibold tracking-tight">
             {isLoading ? "Carregando..." : formatCurrency(totalMonth)}
           </h2>
           <p className="mt-3 text-sm leading-6 text-viggaMuted">
             Soma dos lançamentos registrados neste mês.
           </p>
-          <div className="mt-4 inline-flex items-center gap-2 rounded-full border border-viggaGold/10 bg-black/20 px-3 py-2">
-            <div className="h-2 w-2 rounded-full bg-viggaGreen" />
-            <span className="text-xs text-viggaText">
-              Atualizado em tempo real
-            </span>
-          </div>
 
-          {/* BOTÃO RELATÓRIO */}
+          {/* BADGE CLICÁVEL PARA ATUALIZAR */}
+          <motion.button
+            type="button"
+            whileTap={{ scale: 0.95 }}
+            onClick={fetchData}
+            disabled={isLoading}
+            className="mt-4 inline-flex items-center gap-2 rounded-full border border-viggaGold/10 bg-black/20 px-3 py-2 disabled:opacity-60"
+          >
+            <RefreshCw
+              size={10}
+              className={`text-viggaGreen ${isLoading ? "animate-spin" : ""}`}
+            />
+            <span className="text-xs text-viggaText">
+              {isLoading ? "Atualizando..." : "Toque para atualizar"}
+            </span>
+          </motion.button>
+
+          {/* BOTÃO RELATÓRIO ← sem o mês */}
           <motion.button
             whileTap={{ scale: 0.97 }}
             onClick={() => navigate("/report")}
             className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl border border-viggaGold/15 bg-black/20 py-3 text-sm font-medium text-viggaGold"
           >
             <FileBarChart size={15} />
-            Ver relatório de {mesAtual}
+            Ver relatório
           </motion.button>
         </Card>
       </motion.div>
@@ -474,7 +482,7 @@ Seja direto, use linguagem simples e amigável. Não use markdown, asteriscos ou
         )}
       </section>
 
-      {/* IA DA VIGGA — card clicável */}
+      {/* IA DA VIGGA */}
       <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
@@ -612,7 +620,6 @@ Seja direto, use linguagem simples e amigável. Não use markdown, asteriscos ou
                 onClick={(e) => e.stopPropagation()}
                 className="w-full max-w-[430px] rounded-[2rem] border border-viggaGold/10 bg-viggaCard p-5 shadow-2xl"
               >
-                {/* Cabeçalho */}
                 <div className="mb-5 flex items-start justify-between gap-4">
                   <div className="flex items-center gap-3">
                     <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-viggaGold/10">
@@ -642,7 +649,6 @@ Seja direto, use linguagem simples e amigável. Não use markdown, asteriscos ou
                   </button>
                 </div>
 
-                {/* Conteúdo */}
                 <div className="mb-5">
                   {!aiText && !isGenerating && !aiError && (
                     <div className="rounded-2xl bg-black/20 px-4 py-8 text-center">
@@ -702,7 +708,6 @@ Seja direto, use linguagem simples e amigável. Não use markdown, asteriscos ou
                   )}
                 </div>
 
-                {/* Botão analisar / regerar */}
                 <motion.button
                   whileTap={{ scale: 0.97 }}
                   type="button"

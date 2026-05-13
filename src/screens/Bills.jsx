@@ -344,7 +344,7 @@ function Bills() {
           <div className="flex items-center justify-between">
             <div>
               <p className={ui.eyebrow}>Próximo vencimento</p>
-              <h2 className="mt-2 text-3xl font-semibold">
+              <h2 className="mt-2 text-xl font-semibold leading-tight">
                 {isLoading
                   ? "Carregando..."
                   : nextBill

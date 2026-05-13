@@ -19,9 +19,6 @@ import FilterBar from "../components/FilterBar";
 import { applyTransactionFilters } from "../utils/filterUtils";
 import { useAuth } from "../contexts/AuthContext";
 
-// ─────────────────────────────────────────────
-// CATEGORIAS
-// ─────────────────────────────────────────────
 const CATEGORIES = [
   "Assinaturas",
   "Casa",
@@ -42,9 +39,6 @@ const CATEGORIES = [
 
 const PAYMENT_METHODS = ["Pix", "Crédito", "Dinheiro", "Não identificado"];
 
-// ─────────────────────────────────────────────
-// ESTADO INICIAL DOS FILTROS
-// ─────────────────────────────────────────────
 const DEFAULT_FILTERS = {
   search: "",
   category: "",
@@ -53,6 +47,8 @@ const DEFAULT_FILTERS = {
   status: "",
 };
 
+const INITIAL_TX_COUNT = 5;
+
 const Launch = () => {
   const { householdId } = useAuth();
   const [input, setInput] = useState("");
@@ -60,6 +56,7 @@ const Launch = () => {
   const [lastSaved, setLastSaved] = useState(null);
   const [transactions, setTransactions] = useState([]);
   const [loadingTransactions, setLoadingTransactions] = useState(false);
+  const [showAllTransactions, setShowAllTransactions] = useState(false);
 
   const [selectedTransaction, setSelectedTransaction] = useState(null);
   const [isEditing, setIsEditing] = useState(false);
@@ -72,18 +69,13 @@ const Launch = () => {
   const [editPaymentMethod, setEditPaymentMethod] = useState("");
   const [editDate, setEditDate] = useState("");
 
-  // ── MODAL DE RECORRÊNCIA ─────────────────────
   const [showRecurrenceModal, setShowRecurrenceModal] = useState(false);
   const [pendingLaunch, setPendingLaunch] = useState(null);
   const [recurrencePayment, setRecurrencePayment] = useState("Pix");
   const [isSavingRecurrence, setIsSavingRecurrence] = useState(false);
 
-  // ── FILTROS ──────────────────────────────────
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
 
-  // ─────────────────────────────────────────────
-  // BUSCA NO SUPABASE
-  // ─────────────────────────────────────────────
   const hasActiveFilters = useMemo(() => {
     return (
       filters.search.trim() ||
@@ -105,7 +97,7 @@ const Launch = () => {
       if (hasActiveFilters) {
         query.limit(200);
       } else {
-        query.limit(5);
+        query.limit(50);
       }
 
       const { data, error } = await query;
@@ -125,17 +117,16 @@ const Launch = () => {
     fetchTransactions();
   }, [hasActiveFilters]);
 
-  // ─────────────────────────────────────────────
-  // FILTRAGEM LOCAL
-  // ─────────────────────────────────────────────
   const filteredTransactions = useMemo(() => {
     if (!hasActiveFilters) return transactions;
     return applyTransactionFilters(transactions, filters);
   }, [transactions, filters, hasActiveFilters]);
 
-  // ─────────────────────────────────────────────
-  // FORMATADORES
-  // ─────────────────────────────────────────────
+  const visibleTransactions = useMemo(() => {
+    if (hasActiveFilters || showAllTransactions) return filteredTransactions;
+    return filteredTransactions.slice(0, INITIAL_TX_COUNT);
+  }, [filteredTransactions, showAllTransactions, hasActiveFilters]);
+
   function formatCurrency(value) {
     return Number(value || 0).toLocaleString("pt-BR", {
       style: "currency",
@@ -152,9 +143,6 @@ const Launch = () => {
     });
   }
 
-  // ─────────────────────────────────────────────
-  // MODAL DE DETALHES
-  // ─────────────────────────────────────────────
   function openTransactionDetails(transaction) {
     setSelectedTransaction(transaction);
     setIsEditing(false);
@@ -170,13 +158,9 @@ const Launch = () => {
     setIsEditing(false);
   }
 
-  // ─────────────────────────────────────────────
-  // PARSE DE TEXTO
-  // ─────────────────────────────────────────────
   function parseLaunchText(text) {
     const normalizedText = text.toLowerCase().trim();
 
-    // VALOR
     const amountMatch = normalizedText.match(
       /\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?|\d+/,
     );
@@ -184,7 +168,6 @@ const Launch = () => {
       ? parseFloat(amountMatch[0].replace(",", "."))
       : 0;
 
-    // CATEGORIA
     let category = "Geral";
     if (/mercado|supermercado|condor/i.test(normalizedText))
       category = "Mercado";
@@ -233,14 +216,12 @@ const Launch = () => {
     if (/viagem|hotel|passagem|airbnb|hostel/i.test(normalizedText))
       category = "Viagens";
 
-    // FORMA DE PAGAMENTO
     let paymentMethod = "Não identificado";
     if (/pix/i.test(normalizedText)) paymentMethod = "Pix";
     if (/cartão|cartao|credito|crédito/i.test(normalizedText))
       paymentMethod = "Crédito";
     if (/dinheiro/i.test(normalizedText)) paymentMethod = "Dinheiro";
 
-    // DATA — detecta padrões como 15/05, 10/05/2025, ontem, hoje
     let transactionDate = new Date();
     let detectedDate = null;
 
@@ -248,7 +229,6 @@ const Launch = () => {
       transactionDate.setDate(transactionDate.getDate() - 1);
     }
 
-    // Detecta data no formato dd/mm ou dd/mm/yyyy
     const dateMatch = normalizedText.match(
       /(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?/,
     );
@@ -266,7 +246,6 @@ const Launch = () => {
 
     const formattedDate = transactionDate.toISOString().split("T")[0];
 
-    // LIMPEZA DA DESCRIÇÃO
     let cleanDescription = normalizedText;
     cleanDescription = cleanDescription.replace(
       /\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?|\d+/g,
@@ -294,21 +273,15 @@ const Launch = () => {
       transaction_date: formattedDate,
       source: "manual",
       notes: null,
-      detectedDate, // sinaliza se teve data no texto
+      detectedDate,
     };
   }
 
-  // ─────────────────────────────────────────────
-  // REGISTRAR
-  // ─────────────────────────────────────────────
   async function handleRegister() {
     if (!input.trim() || isAnalyzing) return;
-
     try {
       setIsAnalyzing(true);
       const parsed = parseLaunchText(input);
-
-      // Se detectou data no texto → pergunta se é recorrente
       if (parsed.detectedDate) {
         setPendingLaunch(parsed);
         setRecurrencePayment(
@@ -320,8 +293,6 @@ const Launch = () => {
         setIsAnalyzing(false);
         return;
       }
-
-      // Sem data → lança direto
       await saveLaunch(parsed);
     } catch (err) {
       console.error("Erro inesperado ao registrar lançamento:", err);
@@ -344,13 +315,11 @@ const Launch = () => {
 
     setLastSaved(data?.[0] || launchData);
     setInput("");
+    setShowAllTransactions(false);
     await fetchTransactions();
     setTimeout(() => setLastSaved(null), 3000);
   }
 
-  // ─────────────────────────────────────────────
-  // SALVAR SEM RECORRÊNCIA (lança só a transação)
-  // ─────────────────────────────────────────────
   async function handleSaveWithoutRecurrence() {
     if (!pendingLaunch) return;
     try {
@@ -363,37 +332,27 @@ const Launch = () => {
     }
   }
 
-  // ─────────────────────────────────────────────
-  // SALVAR COM RECORRÊNCIA (lança transação + vencimento)
-  // ─────────────────────────────────────────────
   async function handleSaveWithRecurrence() {
     if (!pendingLaunch) return;
     try {
       setIsSavingRecurrence(true);
-
       const launchWithPayment = {
         ...pendingLaunch,
         payment_method: recurrencePayment,
       };
-
-      // Salva a transação
       await saveLaunch(launchWithPayment);
-
-      // Salva o vencimento recorrente
       const { error: billError } = await supabase.from("bills").insert([
         {
           name: pendingLaunch.description,
           amount: pendingLaunch.amount,
           due_date: pendingLaunch.transaction_date,
-          status: "paid", // já foi pago (estamos lançando agora)
+          status: "paid",
           recurrence: "monthly",
           payment_method: recurrencePayment,
           household_id: householdId,
         },
       ]);
-
       if (billError) console.error("Erro ao salvar vencimento:", billError);
-
       setShowRecurrenceModal(false);
       setPendingLaunch(null);
     } catch (err) {
@@ -403,19 +362,14 @@ const Launch = () => {
     }
   }
 
-  // ─────────────────────────────────────────────
-  // SALVAR EDIÇÃO
-  // ─────────────────────────────────────────────
   async function handleSaveEdit() {
     if (!selectedTransaction || !editDescription.trim() || !editAmount.trim())
       return;
-
     try {
       setIsSavingEdit(true);
       const parsedAmount = Number(
         editAmount.replace(",", ".").replace(/[^\d.]/g, ""),
       );
-
       const { data, error } = await supabase
         .from("transactions")
         .update({
@@ -432,10 +386,8 @@ const Launch = () => {
         console.error("Erro ao editar lançamento:", error);
         return;
       }
-
       const updatedTransaction = data?.[0];
       if (updatedTransaction) setSelectedTransaction(updatedTransaction);
-
       setIsEditing(false);
       await fetchTransactions();
     } catch (err) {
@@ -445,25 +397,18 @@ const Launch = () => {
     }
   }
 
-  // ─────────────────────────────────────────────
-  // EXCLUIR
-  // ─────────────────────────────────────────────
   async function handleDeleteTransaction() {
     if (!selectedTransaction) return;
-
     try {
       setIsDeletingTransaction(true);
-
       const { error } = await supabase
         .from("transactions")
         .delete()
         .eq("id", selectedTransaction.id);
-
       if (error) {
         console.error("Erro ao excluir lançamento:", error);
         return;
       }
-
       closeTransactionDetails();
       await fetchTransactions();
     } catch (err) {
@@ -473,9 +418,6 @@ const Launch = () => {
     }
   }
 
-  // ─────────────────────────────────────────────
-  // RENDER
-  // ─────────────────────────────────────────────
   return (
     <div className={`${ui.screen} pb-32`}>
       <header className="mb-8 pt-4">
@@ -493,7 +435,6 @@ const Launch = () => {
             value={input}
             onChange={(e) => setInput(e.target.value)}
           />
-
           <div className="mt-4 flex flex-wrap gap-2">
             {[
               "Mercado",
@@ -518,7 +459,6 @@ const Launch = () => {
               </button>
             ))}
           </div>
-
           <div className="mt-4 flex items-center justify-between border-t border-viggaGold/5 pt-4">
             <motion.button
               whileTap={{ scale: 0.9 }}
@@ -528,7 +468,6 @@ const Launch = () => {
               <span className="absolute inset-0 rounded-full bg-viggaGold/10 animate-ping" />
               <Mic size={20} className="relative z-10" />
             </motion.button>
-
             <button
               type="button"
               onClick={handleRegister}
@@ -621,46 +560,63 @@ const Launch = () => {
                 )}
               </motion.div>
             ) : (
-              filteredTransactions.map((transaction) => (
-                <motion.button
-                  key={transaction.id}
-                  type="button"
-                  onClick={() => openTransactionDetails(transaction)}
-                  initial={{ opacity: 0, x: -10 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  whileTap={{ scale: 0.98 }}
-                  className={`${ui.card} flex w-full items-center justify-between border-none bg-viggaCard/50 px-5 py-4 text-left`}
-                >
-                  <div className="min-w-0 pr-4">
-                    <p className="truncate text-sm font-semibold tracking-tight text-viggaText">
-                      {transaction.description}
-                    </p>
-                    <p className="mt-1 text-[11px] font-medium uppercase tracking-wider text-viggaMuted">
-                      {transaction.category || "Geral"} •{" "}
-                      {transaction.payment_method || "Não identificado"} •{" "}
-                      {transaction.transaction_date
-                        ? new Date(
-                            `${transaction.transaction_date}T00:00:00`,
-                          ).toLocaleDateString("pt-BR", {
-                            day: "2-digit",
-                            month: "short",
-                          })
-                        : ""}
-                    </p>
-                  </div>
-                  <div className="shrink-0 text-right">
-                    <p className="text-base font-bold leading-none text-viggaGold">
-                      {formatCurrency(transaction.amount)}
-                    </p>
-                  </div>
-                </motion.button>
-              ))
+              <>
+                {visibleTransactions.map((transaction) => (
+                  <motion.button
+                    key={transaction.id}
+                    type="button"
+                    onClick={() => openTransactionDetails(transaction)}
+                    initial={{ opacity: 0, x: -10 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    whileTap={{ scale: 0.98 }}
+                    className={`${ui.card} flex w-full items-center justify-between border-none bg-viggaCard/50 px-5 py-4 text-left`}
+                  >
+                    <div className="min-w-0 pr-4">
+                      <p className="truncate text-sm font-semibold tracking-tight text-viggaText">
+                        {transaction.description}
+                      </p>
+                      <p className="mt-1 text-[11px] font-medium uppercase tracking-wider text-viggaMuted">
+                        {transaction.category || "Geral"} •{" "}
+                        {transaction.payment_method || "Não identificado"} •{" "}
+                        {transaction.transaction_date
+                          ? new Date(
+                              `${transaction.transaction_date}T00:00:00`,
+                            ).toLocaleDateString("pt-BR", {
+                              day: "2-digit",
+                              month: "short",
+                            })
+                          : ""}
+                      </p>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <p className="text-base font-bold leading-none text-viggaGold">
+                        {formatCurrency(transaction.amount)}
+                      </p>
+                    </div>
+                  </motion.button>
+                ))}
+
+                {/* BOTÃO VER MAIS / VER MENOS */}
+                {!hasActiveFilters &&
+                  filteredTransactions.length > INITIAL_TX_COUNT && (
+                    <motion.button
+                      type="button"
+                      whileTap={{ scale: 0.97 }}
+                      onClick={() => setShowAllTransactions((v) => !v)}
+                      className="w-full rounded-2xl border border-viggaGold/10 bg-black/20 py-3 text-sm font-medium text-viggaGold"
+                    >
+                      {showAllTransactions
+                        ? "Ver menos"
+                        : `Ver mais ${filteredTransactions.length - INITIAL_TX_COUNT} lançamentos`}
+                    </motion.button>
+                  )}
+              </>
             )}
           </div>
         </div>
       </div>
 
-      {/* ── MODAL DE RECORRÊNCIA ─────────────────── */}
+      {/* MODAL DE RECORRÊNCIA */}
       <AnimatePresence>
         {showRecurrenceModal && pendingLaunch && (
           <motion.div
@@ -699,7 +655,6 @@ const Launch = () => {
                 </button>
               </div>
 
-              {/* Forma de pagamento */}
               <div className="mb-5">
                 <p className="mb-2 text-xs uppercase tracking-[0.18em] text-viggaMuted">
                   Forma de pagamento
@@ -722,7 +677,6 @@ const Launch = () => {
                 </div>
               </div>
 
-              {/* Pergunta de recorrência */}
               <p className="mb-3 text-sm text-viggaMuted">
                 Este lançamento se repete todo mês?
               </p>
@@ -739,7 +693,6 @@ const Launch = () => {
                   ) : null}
                   Não, só dessa vez
                 </button>
-
                 <button
                   type="button"
                   onClick={handleSaveWithRecurrence}
@@ -841,7 +794,6 @@ const Launch = () => {
                       </p>
                     )}
                   </div>
-
                   <div className="rounded-2xl bg-black/20 p-4">
                     <p className="text-xs uppercase tracking-[0.18em] text-viggaMuted">
                       Forma
@@ -886,7 +838,6 @@ const Launch = () => {
                       </p>
                     )}
                   </div>
-
                   <div className="rounded-2xl bg-black/20 p-4">
                     <p className="text-xs uppercase tracking-[0.18em] text-viggaMuted">
                       Data
@@ -925,13 +876,12 @@ const Launch = () => {
                     >
                       {isSavingEdit ? (
                         <>
-                          <Loader2 size={16} className="animate-spin" />
+                          <Loader2 size={16} className="animate-spin" />{" "}
                           Salvando...
                         </>
                       ) : (
                         <>
-                          <Save size={16} />
-                          Salvar
+                          <Save size={16} /> Salvar
                         </>
                       )}
                     </button>
