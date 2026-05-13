@@ -41,7 +41,6 @@ export function AuthProvider({ children }) {
 
       setProfile(profileData || null);
 
-      // Busca o household se o perfil tiver household_id
       if (profileData?.household_id) {
         const { data: householdData } = await supabase
           .from("households")
@@ -76,7 +75,6 @@ export function AuthProvider({ children }) {
         householdId: profile?.household_id || null,
         userId,
         userName: profile?.name || "",
-        monthlyGoal: household?.monthly_goal || 5000,
         signOut,
         refreshProfile: () => userId && fetchProfile(userId),
       }}

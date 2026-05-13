@@ -12,6 +12,8 @@ import Login from "./screens/Login";
 import Register from "./screens/Register";
 import Household from "./screens/Household";
 import Profile from "./screens/Profile";
+import Goals from "./screens/Goals";
+import Report from "./screens/Report";
 
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 
@@ -128,6 +130,14 @@ function AppRoutes() {
         <Route
           path="/profile"
           element={!isLoggedIn ? <Navigate to="/login" replace /> : <Profile />}
+        />
+        <Route
+          path="/goals"
+          element={!isLoggedIn ? <Navigate to="/login" replace /> : <Goals />}
+        />
+        <Route
+          path="/report"
+          element={!isLoggedIn ? <Navigate to="/login" replace /> : <Report />}
         />
       </Routes>
     </>

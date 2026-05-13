@@ -1,12 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import {
   UserCircle,
   ArrowRight,
   CalendarClock,
   X,
-  Plus,
-  Trash2,
-  Target,
+  FileBarChart,
+  Sparkles,
+  RefreshCw,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useNavigate } from "react-router-dom";
@@ -15,26 +15,7 @@ import BottomNav from "../components/BottomNav";
 import Card from "../components/Card";
 import StatCard from "../components/StatCard";
 import { supabase } from "../lib/supabase";
-import { aiInsights } from "../data/mockData";
 import { useAuth } from "../contexts/AuthContext";
-
-const CATEGORIES = [
-  "Assinaturas",
-  "Atividade Física",
-  "Casa",
-  "Combustível",
-  "Contas",
-  "Delivery",
-  "Escola",
-  "Farmácia",
-  "Geral",
-  "Lazer",
-  "Mercado",
-  "Outros",
-  "Pets",
-  "Plano de Saúde",
-  "Viagens",
-];
 
 function formatCurrency(value) {
   return Number(value || 0).toLocaleString("pt-BR", {
@@ -52,21 +33,21 @@ function formatHour(dateStr) {
 }
 
 function Dashboard() {
-  const { userName, householdId, monthlyGoal } = useAuth();
+  const { userName, householdId } = useAuth();
   const navigate = useNavigate();
-  const [currentInsight, setCurrentInsight] = useState(0);
   const [transactions, setTransactions] = useState([]);
   const [bills, setBills] = useState([]);
   const [goals, setGoals] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
-
   const [showTodayModal, setShowTodayModal] = useState(false);
-  const [showGoalsModal, setShowGoalsModal] = useState(false);
-  const [showNewGoalForm, setShowNewGoalForm] = useState(false);
-  const [goalType, setGoalType] = useState("category");
-  const [goalCategory, setGoalCategory] = useState("Mercado");
-  const [goalLimit, setGoalLimit] = useState("");
-  const [isSavingGoal, setIsSavingGoal] = useState(false);
+  const [showAiModal, setShowAiModal] = useState(false);
+
+  // Estados da IA
+  const [aiText, setAiText] = useState("");
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [aiError, setAiError] = useState(null);
+  const [generatedAt, setGeneratedAt] = useState(null);
+  const abortRef = useRef(null);
 
   async function fetchData() {
     if (!householdId) return;
@@ -109,15 +90,6 @@ function Dashboard() {
     fetchData();
   }, [householdId]);
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setCurrentInsight((prev) =>
-        prev === aiInsights.length - 1 ? 0 : prev + 1,
-      );
-    }, 4000);
-    return () => clearInterval(interval);
-  }, []);
-
   const currentMonthTransactions = useMemo(() => {
     const now = new Date();
     return transactions.filter((t) => {
@@ -154,28 +126,22 @@ function Dashboard() {
     [todayTransactions],
   );
 
-  // Usa monthlyGoal do contexto (dinâmico)
-  const committedPercentage = Math.min((totalMonth / monthlyGoal) * 100, 100);
-
   const goalsWithProgress = useMemo(() => {
     return goals.map((goal) => {
-      let spent = 0;
-      if (goal.type === "monthly") spent = totalMonth;
-      else if (goal.type === "category") {
-        spent = currentMonthTransactions
-          .filter((t) => t.category === goal.category)
-          .reduce((sum, t) => sum + Number(t.amount || 0), 0);
-      }
+      const spent = currentMonthTransactions
+        .filter((t) => t.category === goal.category)
+        .reduce((sum, t) => sum + Number(t.amount || 0), 0);
       const percentage =
         goal.limit_amount > 0
           ? Math.min(Math.round((spent / goal.limit_amount) * 100), 100)
           : 0;
       return { ...goal, spent, percentage };
     });
-  }, [goals, currentMonthTransactions, totalMonth]);
+  }, [goals, currentMonthTransactions]);
 
   const goalsOk = goalsWithProgress.filter((g) => g.percentage < 80).length;
   const goalsTotal = goalsWithProgress.length;
+  const mesAtual = new Date().toLocaleDateString("pt-BR", { month: "long" });
 
   const quickStats = [
     {
@@ -208,55 +174,10 @@ function Dashboard() {
       title: "Metas",
       value: goalsTotal === 0 ? "Configurar" : `${goalsOk}/${goalsTotal} ok`,
       subtitle: goalsTotal === 0 ? "Toque para criar" : "Este mês",
-      onClick: () => setShowGoalsModal(true),
+      onClick: () => navigate("/goals"),
       clickable: true,
     },
   ];
-
-  async function handleSaveGoal() {
-    if (!goalLimit.trim()) return;
-    try {
-      setIsSavingGoal(true);
-      const parsedLimit = Number(
-        goalLimit.replace(",", ".").replace(/[^\d.]/g, ""),
-      );
-      const name =
-        goalType === "monthly"
-          ? "Gasto total do mês"
-          : `Limite de ${goalCategory}`;
-      const { error } = await supabase.from("goals").insert([
-        {
-          household_id: householdId,
-          type: goalType,
-          category: goalType === "category" ? goalCategory : null,
-          name,
-          limit_amount: parsedLimit,
-        },
-      ]);
-      if (error) {
-        console.error("Erro ao salvar meta:", error);
-        return;
-      }
-      setGoalLimit("");
-      setGoalType("category");
-      setGoalCategory("Mercado");
-      setShowNewGoalForm(false);
-      await fetchData();
-    } catch (err) {
-      console.error("Erro inesperado:", err);
-    } finally {
-      setIsSavingGoal(false);
-    }
-  }
-
-  async function handleDeleteGoal(id) {
-    try {
-      await supabase.from("goals").delete().eq("id", id);
-      await fetchData();
-    } catch (err) {
-      console.error("Erro ao excluir meta:", err);
-    }
-  }
 
   function getDueLabel(date) {
     if (!date) return "";
@@ -283,10 +204,119 @@ function Dashboard() {
     return "text-viggaGreen";
   }
 
-  function getGoalBarColor(percentage) {
-    if (percentage >= 100) return "bg-red-400";
-    if (percentage >= 80) return "bg-yellow-400";
-    return "bg-viggaGreen";
+  // ─────────────────────────────────────────────
+  // GERAR ANÁLISE COM IA
+  // ─────────────────────────────────────────────
+  async function handleGenerateAI() {
+    if (currentMonthTransactions.length === 0) return;
+    if (abortRef.current) abortRef.current.abort();
+    abortRef.current = new AbortController();
+
+    setIsGenerating(true);
+    setAiText("");
+    setAiError(null);
+
+    const categoryMap = {};
+    currentMonthTransactions.forEach((t) => {
+      const cat = t.category || "Geral";
+      categoryMap[cat] = (categoryMap[cat] || 0) + Number(t.amount || 0);
+    });
+    const categoriesSorted = Object.entries(categoryMap)
+      .sort((a, b) => b[1] - a[1])
+      .map(([cat, val]) => `${cat}: ${formatCurrency(val)}`)
+      .join(", ");
+
+    const avgPerTx =
+      currentMonthTransactions.length > 0
+        ? totalMonth / currentMonthTransactions.length
+        : 0;
+
+    const biggestTx =
+      currentMonthTransactions.length > 0
+        ? currentMonthTransactions.reduce((max, t) =>
+            Number(t.amount || 0) > Number(max.amount || 0) ? t : max,
+          )
+        : null;
+
+    const topPayment = (() => {
+      const map = {};
+      currentMonthTransactions.forEach((t) => {
+        const m = t.payment_method || "Outros";
+        map[m] = (map[m] || 0) + 1;
+      });
+      const sorted = Object.entries(map).sort((a, b) => b[1] - a[1]);
+      return sorted.length > 0 ? sorted[0][0] : null;
+    })();
+
+    const prompt = `Você é um consultor financeiro pessoal simpático e direto. Analise os dados financeiros abaixo e responda em português brasileiro.
+
+DADOS DO MÊS ATUAL:
+- Total gasto: ${formatCurrency(totalMonth)}
+- Número de lançamentos: ${currentMonthTransactions.length}
+- Ticket médio: ${formatCurrency(avgPerTx)}
+- Maior gasto: ${biggestTx ? `${biggestTx.description} (${formatCurrency(biggestTx.amount)})` : "N/A"}
+- Gastos por categoria: ${categoriesSorted}
+- Forma de pagamento preferida: ${topPayment || "N/A"}
+
+Responda com:
+1. Uma análise honesta e personalizada do padrão de gastos (2-3 frases)
+2. Dois ou três pontos de atenção ou sugestões práticas de economia
+3. Um elogio ou alerta final dependendo da situação
+
+Seja direto, use linguagem simples e amigável. Não use markdown, asteriscos ou formatação especial. Escreva em parágrafos corridos.`;
+
+    try {
+      const response = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": import.meta.env.VITE_ANTHROPIC_API_KEY,
+          "anthropic-version": "2023-06-01",
+          "anthropic-dangerous-direct-browser-access": "true",
+        },
+        body: JSON.stringify({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 600,
+          stream: true,
+          messages: [{ role: "user", content: prompt }],
+        }),
+        signal: abortRef.current.signal,
+      });
+
+      if (!response.ok) throw new Error(`Erro na API: ${response.status}`);
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const data = line.slice(6).trim();
+          if (data === "[DONE]") continue;
+          try {
+            const parsed = JSON.parse(data);
+            if (parsed.type === "content_block_delta" && parsed.delta?.text) {
+              setAiText((prev) => prev + parsed.delta.text);
+            }
+          } catch {}
+        }
+      }
+      setGeneratedAt(new Date());
+    } catch (err) {
+      if (err.name === "AbortError") return;
+      console.error("Erro ao gerar análise:", err);
+      setAiError(
+        "Não foi possível gerar a análise. Verifique sua conexão e tente novamente.",
+      );
+    } finally {
+      setIsGenerating(false);
+    }
   }
 
   return (
@@ -301,7 +331,6 @@ function Dashboard() {
             Sua vida financeira.
           </h1>
         </div>
-        {/* Sino → Perfil */}
         <motion.button
           whileTap={{ scale: 0.92 }}
           onClick={() => navigate("/profile")}
@@ -332,23 +361,16 @@ function Dashboard() {
               Atualizado em tempo real
             </span>
           </div>
-          <div className="mt-7">
-            <div className="mb-2 flex items-center justify-between">
-              <span className="text-xs text-viggaMuted">Meta mensal</span>
-              <span className="text-xs font-semibold text-viggaGold">
-                {Math.round(committedPercentage)}% de{" "}
-                {formatCurrency(monthlyGoal)}
-              </span>
-            </div>
-            <div className="h-3 overflow-hidden rounded-full bg-black/30">
-              <motion.div
-                initial={{ width: 0 }}
-                animate={{ width: `${committedPercentage}%` }}
-                transition={{ duration: 1 }}
-                className={`h-full rounded-full ${committedPercentage >= 90 ? "bg-red-400" : committedPercentage >= 70 ? "bg-yellow-400" : "bg-viggaGold"}`}
-              />
-            </div>
-          </div>
+
+          {/* BOTÃO RELATÓRIO */}
+          <motion.button
+            whileTap={{ scale: 0.97 }}
+            onClick={() => navigate("/report")}
+            className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl border border-viggaGold/15 bg-black/20 py-3 text-sm font-medium text-viggaGold"
+          >
+            <FileBarChart size={15} />
+            Ver relatório de {mesAtual}
+          </motion.button>
         </Card>
       </motion.div>
 
@@ -428,7 +450,10 @@ function Dashboard() {
                     <p className="text-[11px] uppercase tracking-wider text-viggaMuted">
                       {new Date(`${bill.due_date}T00:00:00`).toLocaleDateString(
                         "pt-BR",
-                        { day: "2-digit", month: "long" },
+                        {
+                          day: "2-digit",
+                          month: "long",
+                        },
                       )}
                     </p>
                   </div>
@@ -449,37 +474,48 @@ function Dashboard() {
         )}
       </section>
 
-      {/* INSIGHT ROTATIVO */}
+      {/* IA DA VIGGA — card clicável */}
       <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ delay: 0.3 }}
         className="mt-8"
       >
-        <Card className="relative overflow-hidden p-5">
-          <div className="absolute right-[-40px] top-[-40px] h-32 w-32 rounded-full bg-viggaGold/10 blur-3xl" />
-          <div className="flex items-center gap-2">
-            <div className="h-2 w-2 rounded-full bg-viggaGold" />
-            <p className="text-sm text-viggaMuted">
-              {aiInsights[currentInsight].label}
-            </p>
-          </div>
-          <AnimatePresence mode="wait">
-            <motion.p
-              key={currentInsight}
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -6 }}
-              transition={{ duration: 0.3 }}
-              className="mt-4 text-[16px] leading-8"
-            >
-              {aiInsights[currentInsight].text}
-            </motion.p>
-          </AnimatePresence>
-          <button className="mt-5 text-sm text-viggaGold transition-opacity hover:opacity-80">
-            {aiInsights[currentInsight].action}
-          </button>
-        </Card>
+        <motion.button
+          type="button"
+          whileTap={{ scale: 0.98 }}
+          onClick={() => setShowAiModal(true)}
+          className="w-full text-left"
+        >
+          <Card className="relative overflow-hidden p-5">
+            <div className="absolute right-[-40px] top-[-40px] h-32 w-32 rounded-full bg-viggaGold/10 blur-3xl" />
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-viggaGold/10">
+                  <Sparkles size={16} className="text-viggaGold" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-viggaText">
+                    IA da Vigga
+                  </p>
+                  <p className="text-xs text-viggaMuted">
+                    {generatedAt
+                      ? `Última análise às ${generatedAt.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`
+                      : "Toque para analisar seus gastos"}
+                  </p>
+                </div>
+              </div>
+              <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-viggaGold/10 bg-black/20">
+                <ArrowRight size={14} className="text-viggaGold" />
+              </div>
+            </div>
+            {aiText && (
+              <p className="mt-4 line-clamp-2 text-sm leading-6 text-viggaMuted">
+                {aiText}
+              </p>
+            )}
+          </Card>
+        </motion.button>
       </motion.div>
 
       {/* MODAL GASTOS HOJE */}
@@ -557,15 +593,15 @@ function Dashboard() {
         )}
       </AnimatePresence>
 
-      {/* MODAL METAS */}
+      {/* MODAL IA DA VIGGA */}
       <AnimatePresence>
-        {showGoalsModal && (
+        {showAiModal && (
           <motion.div
             className="fixed inset-0 z-50 overflow-y-auto bg-black/70 backdrop-blur-sm"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            onClick={() => setShowGoalsModal(false)}
+            onClick={() => setShowAiModal(false)}
           >
             <div className="flex min-h-full items-start justify-center px-5 py-6 pb-32">
               <motion.div
@@ -576,184 +612,125 @@ function Dashboard() {
                 onClick={(e) => e.stopPropagation()}
                 className="w-full max-w-[430px] rounded-[2rem] border border-viggaGold/10 bg-viggaCard p-5 shadow-2xl"
               >
+                {/* Cabeçalho */}
                 <div className="mb-5 flex items-start justify-between gap-4">
-                  <div>
-                    <p className="text-xs font-bold uppercase tracking-[0.18em] text-viggaGold">
-                      Este mês
-                    </p>
-                    <h2 className="mt-1 text-2xl font-semibold text-viggaText">
-                      Minhas metas
-                    </h2>
-                    <p className="mt-1 text-xs text-viggaMuted">
-                      {goalsTotal === 0
-                        ? "Nenhuma meta criada ainda"
-                        : `${goalsOk} de ${goalsTotal} dentro do limite`}
-                    </p>
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-viggaGold/10">
+                      <Sparkles size={18} className="text-viggaGold" />
+                    </div>
+                    <div>
+                      <h2 className="text-lg font-semibold text-viggaText">
+                        IA da Vigga
+                      </h2>
+                      {generatedAt && !isGenerating && (
+                        <p className="text-[10px] text-viggaMuted">
+                          Gerado às{" "}
+                          {generatedAt.toLocaleTimeString("pt-BR", {
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}
+                        </p>
+                      )}
+                    </div>
                   </div>
                   <button
                     type="button"
-                    onClick={() => setShowGoalsModal(false)}
+                    onClick={() => setShowAiModal(false)}
                     className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-viggaGold/10 bg-black/20 text-viggaMuted"
                   >
                     <X size={18} />
                   </button>
                 </div>
 
-                {goalsWithProgress.length === 0 ? (
-                  <div className="rounded-2xl bg-black/20 p-5 text-center mb-4">
-                    <Target
-                      size={32}
-                      className="mx-auto mb-2 text-viggaMuted"
-                    />
-                    <p className="text-sm text-viggaMuted">
-                      Crie sua primeira meta abaixo.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="mb-4 space-y-4">
-                    {goalsWithProgress.map((goal) => (
-                      <div
-                        key={goal.id}
-                        className="rounded-2xl bg-black/20 p-4"
-                      >
-                        <div className="mb-2 flex items-center justify-between">
-                          <div>
-                            <p className="text-sm font-medium text-viggaText">
-                              {goal.name}
-                            </p>
-                            <p className="text-xs text-viggaMuted">
-                              {formatCurrency(goal.spent)} de{" "}
-                              {formatCurrency(goal.limit_amount)}
-                            </p>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <span
-                              className={`text-xs font-bold ${goal.percentage >= 100 ? "text-red-400" : goal.percentage >= 80 ? "text-yellow-400" : "text-viggaGreen"}`}
-                            >
-                              {goal.percentage}%
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteGoal(goal.id)}
-                              className="text-viggaMuted opacity-60 hover:opacity-100"
-                            >
-                              <Trash2 size={14} />
-                            </button>
-                          </div>
-                        </div>
-                        <div className="h-2 overflow-hidden rounded-full bg-black/30">
-                          <motion.div
-                            initial={{ width: 0 }}
-                            animate={{ width: `${goal.percentage}%` }}
-                            transition={{ duration: 0.8 }}
-                            className={`h-full rounded-full ${getGoalBarColor(goal.percentage)}`}
-                          />
-                        </div>
-                        {goal.percentage >= 100 && (
-                          <p className="mt-1.5 text-[10px] font-medium text-red-400">
-                            ⚠ Limite excedido
-                          </p>
-                        )}
-                        {goal.percentage >= 80 && goal.percentage < 100 && (
-                          <p className="mt-1.5 text-[10px] font-medium text-yellow-400">
-                            ⚡ Próximo do limite
-                          </p>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                <AnimatePresence>
-                  {showNewGoalForm ? (
-                    <motion.div
-                      initial={{ opacity: 0, height: 0 }}
-                      animate={{ opacity: 1, height: "auto" }}
-                      exit={{ opacity: 0, height: 0 }}
-                      className="overflow-hidden"
-                    >
-                      <div className="space-y-3 rounded-2xl bg-black/20 p-4">
-                        <div>
-                          <p className="mb-2 text-xs uppercase tracking-wider text-viggaMuted">
-                            Tipo de meta
-                          </p>
-                          <div className="flex gap-2">
-                            {[
-                              { v: "category", l: "Por categoria" },
-                              { v: "monthly", l: "Total do mês" },
-                            ].map((t) => (
-                              <button
-                                key={t.v}
-                                type="button"
-                                onClick={() => setGoalType(t.v)}
-                                className={`flex-1 rounded-xl py-2 text-xs font-medium transition-colors ${goalType === t.v ? "bg-viggaGold text-black" : "border border-viggaGold/10 bg-black/20 text-viggaMuted"}`}
-                              >
-                                {t.l}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                        {goalType === "category" && (
-                          <div>
-                            <p className="mb-2 text-xs uppercase tracking-wider text-viggaMuted">
-                              Categoria
-                            </p>
-                            <select
-                              value={goalCategory}
-                              onChange={(e) => setGoalCategory(e.target.value)}
-                              className="w-full rounded-xl border border-viggaGold/10 bg-black/30 px-3 py-2.5 text-sm text-viggaText outline-none"
-                            >
-                              {CATEGORIES.map((c) => (
-                                <option key={c} value={c}>
-                                  {c}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                        )}
-                        <div>
-                          <p className="mb-2 text-xs uppercase tracking-wider text-viggaMuted">
-                            Limite (R$)
-                          </p>
-                          <input
-                            type="text"
-                            inputMode="decimal"
-                            value={goalLimit}
-                            onChange={(e) => setGoalLimit(e.target.value)}
-                            placeholder="Ex: 500,00"
-                            className="w-full rounded-xl border border-viggaGold/10 bg-black/30 px-3 py-2.5 text-sm text-viggaText outline-none placeholder:text-viggaMuted"
-                          />
-                        </div>
-                        <div className="flex gap-2">
-                          <button
-                            type="button"
-                            onClick={() => setShowNewGoalForm(false)}
-                            className="flex-1 rounded-xl border border-viggaGold/10 bg-viggaBrown py-2.5 text-sm font-medium text-viggaGold"
-                          >
-                            Cancelar
-                          </button>
-                          <button
-                            type="button"
-                            onClick={handleSaveGoal}
-                            disabled={isSavingGoal}
-                            className="flex-1 rounded-xl bg-viggaGold py-2.5 text-sm font-medium text-black disabled:opacity-60"
-                          >
-                            {isSavingGoal ? "Salvando..." : "Salvar"}
-                          </button>
-                        </div>
-                      </div>
-                    </motion.div>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => setShowNewGoalForm(true)}
-                      className="flex w-full items-center justify-center gap-2 rounded-2xl border border-viggaGold/10 bg-black/20 py-3 text-sm font-medium text-viggaGold"
-                    >
-                      <Plus size={16} />
-                      Nova meta
-                    </button>
+                {/* Conteúdo */}
+                <div className="mb-5">
+                  {!aiText && !isGenerating && !aiError && (
+                    <div className="rounded-2xl bg-black/20 px-4 py-8 text-center">
+                      <Sparkles
+                        size={28}
+                        className="mx-auto mb-3 text-viggaGold opacity-40"
+                      />
+                      <p className="text-sm text-viggaMuted">
+                        {currentMonthTransactions.length === 0
+                          ? "Lance algumas transações para gerar uma análise."
+                          : 'Toque em "Analisar" para receber uma análise personalizada dos seus gastos.'}
+                      </p>
+                    </div>
                   )}
-                </AnimatePresence>
+
+                  {isGenerating && aiText === "" && (
+                    <div className="rounded-2xl bg-black/20 px-4 py-8 text-center">
+                      <div className="flex items-center justify-center gap-1">
+                        {[0, 1, 2].map((i) => (
+                          <motion.div
+                            key={i}
+                            className="h-2 w-2 rounded-full bg-viggaGold"
+                            animate={{ opacity: [0.3, 1, 0.3] }}
+                            transition={{
+                              duration: 1,
+                              repeat: Infinity,
+                              delay: i * 0.2,
+                            }}
+                          />
+                        ))}
+                      </div>
+                      <p className="mt-3 text-sm text-viggaMuted">
+                        Analisando seus dados...
+                      </p>
+                    </div>
+                  )}
+
+                  {aiError && (
+                    <div className="rounded-2xl bg-red-400/10 px-4 py-4">
+                      <p className="text-sm text-red-400">{aiError}</p>
+                    </div>
+                  )}
+
+                  {aiText && (
+                    <div className="rounded-2xl bg-black/20 px-4 py-4">
+                      <p className="text-[15px] leading-7 text-viggaText whitespace-pre-wrap">
+                        {aiText}
+                        {isGenerating && (
+                          <motion.span
+                            animate={{ opacity: [1, 0] }}
+                            transition={{ duration: 0.6, repeat: Infinity }}
+                            className="ml-0.5 inline-block h-4 w-0.5 bg-viggaGold align-middle"
+                          />
+                        )}
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Botão analisar / regerar */}
+                <motion.button
+                  whileTap={{ scale: 0.97 }}
+                  type="button"
+                  onClick={handleGenerateAI}
+                  disabled={
+                    isGenerating || currentMonthTransactions.length === 0
+                  }
+                  className={`flex w-full items-center justify-center gap-2 rounded-2xl py-3.5 text-sm font-medium disabled:opacity-40 ${
+                    aiText
+                      ? "border border-viggaGold/20 bg-black/20 text-viggaGold"
+                      : "bg-viggaGold text-black"
+                  }`}
+                >
+                  {isGenerating ? (
+                    <>
+                      <RefreshCw size={14} className="animate-spin" />{" "}
+                      Analisando...
+                    </>
+                  ) : aiText ? (
+                    <>
+                      <RefreshCw size={14} /> Regerar análise
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles size={14} /> Analisar com IA
+                    </>
+                  )}
+                </motion.button>
               </motion.div>
             </div>
           </motion.div>

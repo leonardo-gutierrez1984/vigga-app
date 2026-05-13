@@ -1,5 +1,4 @@
-import { Home, Plus, CreditCard, Calendar, BarChart3 } from "lucide-react";
-
+import { Home, Plus, CreditCard, Calendar, Target } from "lucide-react";
 import { NavLink } from "react-router-dom";
 
 const items = [
@@ -24,9 +23,9 @@ const items = [
     label: "Vencimentos",
   },
   {
-    to: "/insights",
-    icon: BarChart3,
-    label: "Insights",
+    to: "/goals",
+    icon: Target,
+    label: "Metas",
   },
 ];
 
@@ -36,7 +35,6 @@ function BottomNav() {
       <nav className="flex items-center justify-between rounded-[28px] border border-viggaGold/10 bg-viggaCard/80 px-3 py-3 shadow-2xl backdrop-blur-2xl">
         {items.map((item) => {
           const Icon = item.icon;
-
           return (
             <NavLink
               key={item.to}
@@ -50,7 +48,6 @@ function BottomNav() {
               }
             >
               <Icon size={20} strokeWidth={2.2} />
-
               <span>{item.label}</span>
             </NavLink>
           );

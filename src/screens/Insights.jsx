@@ -1,6 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
-import { BrainCircuit, TrendingUp, TrendingDown, Minus } from "lucide-react";
-import { motion } from "framer-motion";
+import { useEffect, useMemo, useState, useRef } from "react";
+import {
+  BrainCircuit,
+  TrendingUp,
+  TrendingDown,
+  Sparkles,
+  RefreshCw,
+} from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
 
 import BottomNav from "../components/BottomNav";
 import Card from "../components/Card";
@@ -30,6 +36,13 @@ function Insights() {
   const [transactions, setTransactions] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
 
+  // Estados da IA
+  const [aiText, setAiText] = useState("");
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [aiError, setAiError] = useState(null);
+  const [generatedAt, setGeneratedAt] = useState(null);
+  const abortRef = useRef(null);
+
   async function fetchTransactions() {
     if (!householdId) return;
     try {
@@ -40,7 +53,7 @@ function Insights() {
         .eq("household_id", householdId)
         .order("created_at", { ascending: false });
       if (error) {
-        console.error("Erro ao buscar transações:", error);
+        console.error("Erro:", error);
         return;
       }
       setTransactions(data || []);
@@ -55,9 +68,6 @@ function Insights() {
     fetchTransactions();
   }, [householdId]);
 
-  // ─────────────────────────────────────────────
-  // CÁLCULOS
-  // ─────────────────────────────────────────────
   const now = new Date();
 
   const currentMonthTx = useMemo(() => {
@@ -89,7 +99,6 @@ function Insights() {
     [lastMonthTx],
   );
 
-  // Variação mês a mês
   const monthVariation = useMemo(() => {
     if (totalLastMonth === 0) return null;
     return Math.round(
@@ -97,7 +106,6 @@ function Insights() {
     );
   }, [totalCurrentMonth, totalLastMonth]);
 
-  // Categoria que mais gastou este mês
   const topCategory = useMemo(() => {
     const map = {};
     currentMonthTx.forEach((t) => {
@@ -110,7 +118,6 @@ function Insights() {
       : null;
   }, [currentMonthTx]);
 
-  // Categoria que mais gastou mês passado
   const topCategoryLastMonth = useMemo(() => {
     const map = {};
     lastMonthTx.forEach((t) => {
@@ -123,7 +130,6 @@ function Insights() {
       : null;
   }, [lastMonthTx]);
 
-  // Variação da categoria top
   const topCategoryVariation = useMemo(() => {
     if (!topCategory || !topCategoryLastMonth) return null;
     if (topCategory.name !== topCategoryLastMonth.name) return null;
@@ -135,7 +141,6 @@ function Insights() {
     );
   }, [topCategory, topCategoryLastMonth]);
 
-  // Dia da semana que mais gasta
   const topDayOfWeek = useMemo(() => {
     const map = {};
     currentMonthTx.forEach((t) => {
@@ -147,7 +152,6 @@ function Insights() {
     return sorted.length > 0 ? DAYS[sorted[0][0]] : null;
   }, [currentMonthTx]);
 
-  // Forma de pagamento mais usada
   const topPaymentMethod = useMemo(() => {
     const map = {};
     currentMonthTx.forEach((t) => {
@@ -160,13 +164,11 @@ function Insights() {
       : null;
   }, [currentMonthTx]);
 
-  // Média por lançamento
   const avgPerTransaction = useMemo(() => {
     if (currentMonthTx.length === 0) return 0;
     return totalCurrentMonth / currentMonthTx.length;
   }, [totalCurrentMonth, currentMonthTx]);
 
-  // Maior gasto único
   const biggestTransaction = useMemo(() => {
     if (currentMonthTx.length === 0) return null;
     return currentMonthTx.reduce((max, t) =>
@@ -174,9 +176,6 @@ function Insights() {
     );
   }, [currentMonthTx]);
 
-  // ─────────────────────────────────────────────
-  // INSIGHT PRINCIPAL
-  // ─────────────────────────────────────────────
   const mainInsight = useMemo(() => {
     if (monthVariation === null) {
       return {
@@ -208,12 +207,8 @@ function Insights() {
     };
   }, [monthVariation, totalCurrentMonth, totalLastMonth, topCategory]);
 
-  // ─────────────────────────────────────────────
-  // CARDS DE INSIGHTS
-  // ─────────────────────────────────────────────
   const insightCards = useMemo(() => {
     const cards = [];
-
     if (topCategory) {
       cards.push({
         title: `${topCategory.name} é seu maior gasto`,
@@ -224,7 +219,6 @@ function Insights() {
         color: "text-viggaGold",
       });
     }
-
     if (topDayOfWeek) {
       cards.push({
         title: `${topDayOfWeek} é seu dia mais caro`,
@@ -232,7 +226,6 @@ function Insights() {
         color: "text-blue-400",
       });
     }
-
     if (topPaymentMethod) {
       cards.push({
         title: `${topPaymentMethod.name} é sua forma preferida`,
@@ -240,7 +233,6 @@ function Insights() {
         color: "text-viggaGreen",
       });
     }
-
     if (avgPerTransaction > 0) {
       cards.push({
         title: "Ticket médio por lançamento",
@@ -248,7 +240,6 @@ function Insights() {
         color: "text-purple-400",
       });
     }
-
     if (biggestTransaction) {
       cards.push({
         title: "Maior gasto do mês",
@@ -256,7 +247,6 @@ function Insights() {
         color: "text-red-400",
       });
     }
-
     return cards;
   }, [
     topCategory,
@@ -267,6 +257,112 @@ function Insights() {
     biggestTransaction,
     currentMonthTx,
   ]);
+
+  // ─────────────────────────────────────────────
+  // GERAR ANÁLISE COM IA
+  // ─────────────────────────────────────────────
+  async function handleGenerateAI() {
+    if (currentMonthTx.length === 0) return;
+
+    // Cancela geração anterior se existir
+    if (abortRef.current) abortRef.current.abort();
+    abortRef.current = new AbortController();
+
+    setIsGenerating(true);
+    setAiText("");
+    setAiError(null);
+
+    // Monta resumo financeiro para mandar para a IA
+    const categoryMap = {};
+    currentMonthTx.forEach((t) => {
+      const cat = t.category || "Geral";
+      categoryMap[cat] = (categoryMap[cat] || 0) + Number(t.amount || 0);
+    });
+    const categoriesSorted = Object.entries(categoryMap)
+      .sort((a, b) => b[1] - a[1])
+      .map(([cat, val]) => `${cat}: ${formatCurrency(val)}`)
+      .join(", ");
+
+    const prompt = `Você é um consultor financeiro pessoal simpático e direto. Analise os dados financeiros abaixo e responda em português brasileiro.
+
+DADOS DO MÊS ATUAL:
+- Total gasto: ${formatCurrency(totalCurrentMonth)}
+- Número de lançamentos: ${currentMonthTx.length}
+- Ticket médio: ${formatCurrency(avgPerTransaction)}
+- Maior gasto: ${biggestTransaction ? `${biggestTransaction.description} (${formatCurrency(biggestTransaction.amount)})` : "N/A"}
+- Gastos por categoria: ${categoriesSorted}
+- Forma de pagamento preferida: ${topPaymentMethod ? topPaymentMethod.name : "N/A"}
+- Dia da semana com mais gastos: ${topDayOfWeek || "N/A"}
+${monthVariation !== null ? `- Variação em relação ao mês passado: ${monthVariation > 0 ? "+" : ""}${monthVariation}% (mês passado: ${formatCurrency(totalLastMonth)})` : ""}
+
+Responda com:
+1. Uma análise honesta e personalizada do padrão de gastos (2-3 frases)
+2. Dois ou três pontos de atenção ou sugestões práticas de economia
+3. Um elogio ou alerta final dependendo da situação
+
+Seja direto, use linguagem simples e amigável. Não use markdown, asteriscos ou formatação especial. Escreva em parágrafos corridos.`;
+
+    try {
+      const response = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": import.meta.env.VITE_ANTHROPIC_API_KEY,
+          "anthropic-version": "2023-06-01",
+          "anthropic-dangerous-direct-browser-access": "true",
+        },
+        body: JSON.stringify({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 600,
+          stream: true,
+          messages: [{ role: "user", content: prompt }],
+        }),
+        signal: abortRef.current.signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(`Erro na API: ${response.status}`);
+      }
+
+      // Lê o streaming linha por linha
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const data = line.slice(6).trim();
+          if (data === "[DONE]") continue;
+          try {
+            const parsed = JSON.parse(data);
+            if (parsed.type === "content_block_delta" && parsed.delta?.text) {
+              setAiText((prev) => prev + parsed.delta.text);
+            }
+          } catch {
+            // ignora linhas inválidas
+          }
+        }
+      }
+
+      setGeneratedAt(new Date());
+    } catch (err) {
+      if (err.name === "AbortError") return;
+      console.error("Erro ao gerar análise:", err);
+      setAiError(
+        "Não foi possível gerar a análise. Verifique sua chave de API e tente novamente.",
+      );
+    } finally {
+      setIsGenerating(false);
+    }
+  }
 
   // ─────────────────────────────────────────────
   // RENDER
@@ -286,7 +382,6 @@ function Insights() {
       >
         <Card className="relative mt-10 overflow-hidden p-6">
           <div className="absolute right-[-40px] top-[-40px] h-32 w-32 rounded-full bg-viggaGold/10 blur-3xl" />
-
           <div className="flex items-center justify-between">
             <div>
               <p className={ui.eyebrow}>Insight principal</p>
@@ -304,12 +399,9 @@ function Insights() {
               )}
             </div>
           </div>
-
           <p className="mt-6 text-[16px] leading-7 text-viggaMuted">
             {isLoading ? "Analisando seus lançamentos..." : mainInsight.text}
           </p>
-
-          {/* Mini resumo do mês */}
           {!isLoading && currentMonthTx.length > 0 && (
             <div className="mt-6 grid grid-cols-2 gap-3">
               <div className="rounded-2xl bg-black/20 p-3 text-center">
@@ -329,8 +421,149 @@ function Insights() {
         </Card>
       </motion.div>
 
-      {/* OUTROS INSIGHTS */}
-      <section className="mt-10">
+      {/* ANÁLISE COM IA */}
+      <section className="mt-8">
+        <Card className="relative overflow-hidden p-5">
+          <div className="absolute right-[-40px] top-[-40px] h-28 w-28 rounded-full bg-viggaGold/5 blur-3xl" />
+
+          {/* Cabeçalho da seção IA */}
+          <div className="mb-4 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-viggaGold/10">
+                <Sparkles size={15} className="text-viggaGold" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-viggaText">
+                  Análise com IA
+                </p>
+                {generatedAt && !isGenerating && (
+                  <p className="text-[10px] text-viggaMuted">
+                    Gerado às{" "}
+                    {generatedAt.toLocaleTimeString("pt-BR", {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {/* Botão gerar / regerar */}
+            <motion.button
+              whileTap={{ scale: 0.92 }}
+              type="button"
+              onClick={handleGenerateAI}
+              disabled={isGenerating || currentMonthTx.length === 0}
+              className={`flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-medium transition-colors disabled:opacity-40 ${
+                aiText
+                  ? "border border-viggaGold/10 bg-black/20 text-viggaMuted"
+                  : "bg-viggaGold text-black"
+              }`}
+            >
+              {isGenerating ? (
+                <>
+                  <RefreshCw size={12} className="animate-spin" />
+                  Analisando...
+                </>
+              ) : aiText ? (
+                <>
+                  <RefreshCw size={12} />
+                  Regerar
+                </>
+              ) : (
+                <>
+                  <Sparkles size={12} />
+                  Analisar com IA
+                </>
+              )}
+            </motion.button>
+          </div>
+
+          {/* Conteúdo da análise */}
+          <AnimatePresence mode="wait">
+            {!aiText && !isGenerating && !aiError && (
+              <motion.div
+                key="empty"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="rounded-2xl bg-black/20 px-4 py-6 text-center"
+              >
+                <Sparkles
+                  size={28}
+                  className="mx-auto mb-2 text-viggaGold opacity-40"
+                />
+                <p className="text-sm text-viggaMuted">
+                  {currentMonthTx.length === 0
+                    ? "Lance algumas transações para gerar uma análise."
+                    : 'Toque em "Analisar com IA" para receber uma análise personalizada dos seus gastos.'}
+                </p>
+              </motion.div>
+            )}
+
+            {isGenerating && aiText === "" && (
+              <motion.div
+                key="loading"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="rounded-2xl bg-black/20 px-4 py-6 text-center"
+              >
+                <div className="flex items-center justify-center gap-1">
+                  {[0, 1, 2].map((i) => (
+                    <motion.div
+                      key={i}
+                      className="h-2 w-2 rounded-full bg-viggaGold"
+                      animate={{ opacity: [0.3, 1, 0.3] }}
+                      transition={{
+                        duration: 1,
+                        repeat: Infinity,
+                        delay: i * 0.2,
+                      }}
+                    />
+                  ))}
+                </div>
+                <p className="mt-3 text-sm text-viggaMuted">
+                  Analisando seus dados...
+                </p>
+              </motion.div>
+            )}
+
+            {aiError && (
+              <motion.div
+                key="error"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="rounded-2xl bg-red-400/10 px-4 py-4"
+              >
+                <p className="text-sm text-red-400">{aiError}</p>
+              </motion.div>
+            )}
+
+            {aiText && (
+              <motion.div
+                key="result"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+              >
+                <p className="text-[15px] leading-7 text-viggaText whitespace-pre-wrap">
+                  {aiText}
+                  {isGenerating && (
+                    <motion.span
+                      animate={{ opacity: [1, 0] }}
+                      transition={{ duration: 0.6, repeat: Infinity }}
+                      className="ml-0.5 inline-block h-4 w-0.5 bg-viggaGold align-middle"
+                    />
+                  )}
+                </p>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </Card>
+      </section>
+
+      {/* ANÁLISE DETALHADA */}
+      <section className="mt-8">
         <div className="mb-5 flex items-center justify-between">
           <h2 className="text-lg font-medium">Análise detalhada</h2>
           <span className="text-sm text-viggaMuted">
