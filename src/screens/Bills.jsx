@@ -17,22 +17,23 @@ import FilterBar from "../components/FilterBar";
 import { applyBillFilters } from "../utils/filterUtils";
 import { useAuth } from "../contexts/AuthContext";
 
-const CATEGORIES = [
+const BASE_CATEGORIES = [
   "Assinaturas",
   "Atividade Física",
   "Casa",
   "Combustível",
   "Contas",
+  "Cursos",
   "Delivery",
   "Escola",
   "Farmácia",
   "Geral",
   "Lazer",
   "Mercado",
-  "Outros",
   "Pets",
-  "Plano de Saúde",
+  "Saúde",
   "Viagens",
+  "Outros",
 ];
 
 const PAYMENT_METHODS = ["Pix", "Crédito", "Dinheiro", "Boleto"];
@@ -42,6 +43,35 @@ const RECURRENCE_OPTIONS = [
   { value: "biweekly", label: "Quinzenal" },
   { value: "weekly", label: "Semanal" },
 ];
+
+function PaymentBadge({ method }) {
+  const map = {
+    Crédito: {
+      label: "Crédito",
+      color: "text-blue-400 border-blue-400/20 bg-blue-400/10",
+    },
+    Pix: {
+      label: "Pix",
+      color: "text-viggaGreen border-viggaGreen/20 bg-viggaGreen/10",
+    },
+    Dinheiro: {
+      label: "Dinheiro",
+      color: "text-yellow-400 border-yellow-400/20 bg-yellow-400/10",
+    },
+    Boleto: {
+      label: "Boleto",
+      color: "text-viggaMuted border-viggaGold/10 bg-black/20",
+    },
+  };
+  const config = map[method] || map["Boleto"];
+  return (
+    <span
+      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${config.color}`}
+    >
+      {config.label}
+    </span>
+  );
+}
 
 function getStatusLabel(status, dueDate) {
   if (status === "paid") return "Registrado";
@@ -88,7 +118,6 @@ function getStatusDot(status, dueDate) {
   return "bg-viggaGreen";
 }
 
-// Verifica se vence em até 5 dias e precisa confirmar valor
 function needsValueConfirmation(dueDate, status) {
   if (status !== "pending") return false;
   if (!dueDate) return false;
@@ -100,20 +129,14 @@ function needsValueConfirmation(dueDate, status) {
   return diff >= 0 && diff <= 5;
 }
 
-// Gera datas futuras para recorrência semanal/quinzenal no mês
 function generateRecurringDates(startDate, recurrence) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-
   const start = new Date(`${startDate}T00:00:00`);
   const intervalDays = recurrence === "weekly" ? 7 : 15;
-
-  // Descobre o fim do mês da data inicial
   const endOfMonth = new Date(start.getFullYear(), start.getMonth() + 1, 0);
-
   const dates = [];
   let current = new Date(start);
-
   while (current <= endOfMonth) {
     if (current >= today) {
       dates.push(current.toISOString().split("T")[0]);
@@ -121,22 +144,18 @@ function generateRecurringDates(startDate, recurrence) {
     current = new Date(current);
     current.setDate(current.getDate() + intervalDays);
   }
-
   return dates;
 }
 
-// Gera próximas 4 datas semanais/quinzenais a partir de uma data
 function generateNextRecurringDates(fromDate, recurrence) {
   const intervalDays = recurrence === "weekly" ? 7 : 15;
   const dates = [];
   let current = new Date(`${fromDate}T00:00:00`);
-
   for (let i = 0; i < 4; i++) {
     current = new Date(current);
     current.setDate(current.getDate() + intervalDays);
     dates.push(current.toISOString().split("T")[0]);
   }
-
   return dates;
 }
 
@@ -235,19 +254,16 @@ function Bills() {
     return pending.length > 0 ? pending[0] : null;
   }, [bills]);
 
-  // Cria um bill e opcionalmente uma transação antecipada de crédito
   async function createBillWithCredit(billPayload, parsedAmount, payMethod) {
     const { data: billData, error } = await supabase
       .from("bills")
       .insert([billPayload])
       .select()
       .single();
-
     if (error) {
       console.error("Erro ao salvar vencimento:", error);
       return null;
     }
-
     if (payMethod === "Crédito" && parsedAmount > 0 && billData) {
       await supabase.from("transactions").insert([
         {
@@ -263,7 +279,6 @@ function Bills() {
         },
       ]);
     }
-
     return billData;
   }
 
@@ -274,11 +289,8 @@ function Bills() {
       const parsedAmount = billAmount.trim()
         ? Number(billAmount.replace(",", ".").replace(/[^\d.]/g, ""))
         : 0;
-
       if (billRecurrence === "weekly" || billRecurrence === "biweekly") {
-        // Gera todas as datas do mês a partir da data informada
         const dates = generateRecurringDates(billDueDate, billRecurrence);
-
         for (const date of dates) {
           await createBillWithCredit(
             {
@@ -296,7 +308,6 @@ function Bills() {
           );
         }
       } else {
-        // Mensal — comportamento original
         await createBillWithCredit(
           {
             name: billName,
@@ -312,7 +323,6 @@ function Bills() {
           billPaymentMethod,
         );
       }
-
       setBillName("");
       setBillAmount("");
       setBillDueDate("");
@@ -342,7 +352,6 @@ function Bills() {
     try {
       setIsSavingPay(true);
       const newStatus = payMethod === "Crédito" ? "credit" : "paid";
-
       const { error: billError } = await supabase
         .from("bills")
         .update({ status: newStatus, payment_method: payMethod })
@@ -351,41 +360,33 @@ function Bills() {
         console.error("Erro ao atualizar vencimento:", billError);
         return;
       }
-
       const today = new Date().toISOString().split("T")[0];
-
-      // Remove transação antecipada de crédito se existir
       await supabase
         .from("transactions")
         .delete()
         .eq("household_id", householdId)
         .eq("source", "bill_credit")
         .eq("notes", payingBill.id);
-
-      // Cria transação real com data de hoje
-      await supabase.from("transactions").insert([
-        {
-          description: payingBill.name,
-          amount: payingBill.amount,
-          category: payingBill.category || "Contas",
-          payment_method: payMethod,
-          type: "expense",
-          transaction_date: today,
-          source: "bill",
-          household_id: householdId,
-        },
-      ]);
-
-      // Lógica de recorrência
+      await supabase
+        .from("transactions")
+        .insert([
+          {
+            description: payingBill.name,
+            amount: payingBill.amount,
+            category: payingBill.category || "Contas",
+            payment_method: payMethod,
+            type: "expense",
+            transaction_date: today,
+            source: "bill",
+            household_id: householdId,
+          },
+        ]);
       const recurrence = payingBill.recurrence;
-
       if (recurrence === "monthly") {
-        // Mensal — gera próximo mês
         const currentDue = new Date(`${payingBill.due_date}T00:00:00`);
         const nextDue = new Date(currentDue);
         nextDue.setMonth(nextDue.getMonth() + 1);
         const nextDueStr = nextDue.toISOString().split("T")[0];
-
         const { data: existing } = await supabase
           .from("bills")
           .select("id")
@@ -393,7 +394,6 @@ function Bills() {
           .eq("name", payingBill.name)
           .eq("due_date", nextDueStr)
           .single();
-
         if (!existing) {
           await createBillWithCredit(
             {
@@ -411,7 +411,6 @@ function Bills() {
           );
         }
       } else if (recurrence === "weekly" || recurrence === "biweekly") {
-        // Verifica se este é o último vencimento pendente do grupo no mês
         const { data: remaining } = await supabase
           .from("bills")
           .select("id, due_date")
@@ -420,25 +419,19 @@ function Bills() {
           .eq("recurrence", recurrence)
           .eq("status", "pending")
           .neq("id", payingBill.id);
-
         const currentDue = new Date(`${payingBill.due_date}T00:00:00`);
-        const currentMonth = currentDue.getMonth();
-        const currentYear = currentDue.getFullYear();
-
         const remainingInMonth = (remaining || []).filter((b) => {
           const d = new Date(`${b.due_date}T00:00:00`);
           return (
-            d.getMonth() === currentMonth && d.getFullYear() === currentYear
+            d.getMonth() === currentDue.getMonth() &&
+            d.getFullYear() === currentDue.getFullYear()
           );
         });
-
-        // Se é o último do mês, gera os próximos 4
         if (remainingInMonth.length === 0) {
           const nextDates = generateNextRecurringDates(
             payingBill.due_date,
             recurrence,
           );
-
           for (const date of nextDates) {
             const { data: existingNext } = await supabase
               .from("bills")
@@ -447,7 +440,6 @@ function Bills() {
               .eq("name", payingBill.name)
               .eq("due_date", date)
               .single();
-
             if (!existingNext) {
               await createBillWithCredit(
                 {
@@ -467,7 +459,6 @@ function Bills() {
           }
         }
       }
-
       setShowPayModal(false);
       setPayingBill(null);
       await fetchBills();
@@ -509,7 +500,6 @@ function Bills() {
         console.error("Erro ao atualizar:", error);
         return;
       }
-
       await supabase
         .from("transactions")
         .update({
@@ -521,7 +511,6 @@ function Bills() {
         .eq("household_id", householdId)
         .eq("source", "bill_credit")
         .eq("notes", selectedBill.id);
-
       await fetchBills();
       setSelectedBill(null);
     } catch (err) {
@@ -538,7 +527,6 @@ function Bills() {
         .eq("household_id", householdId)
         .eq("source", "bill_credit")
         .eq("notes", selectedBill.id);
-
       const { error } = await supabase
         .from("bills")
         .delete()
@@ -547,7 +535,6 @@ function Bills() {
         console.error("Erro ao excluir:", error);
         return;
       }
-
       await fetchBills();
       setSelectedBill(null);
     } catch (err) {
@@ -561,7 +548,6 @@ function Bills() {
       currency: "BRL",
     });
   }
-
   function formatDate(date) {
     if (!date) return "Sem data";
     return new Date(`${date}T00:00:00`).toLocaleDateString("pt-BR", {
@@ -597,7 +583,6 @@ function Bills() {
         <h1 className={ui.title}>Tudo sob controle.</h1>
       </header>
 
-      {/* CARD PRINCIPAL */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -639,7 +624,9 @@ function Bills() {
                     : "Sem pendências"}
                 </span>
               </div>
-              {/* Alerta de confirmar valor no card principal */}
+              {nextBill && nextBill.payment_method && (
+                <PaymentBadge method={nextBill.payment_method} />
+              )}
               {nextBill &&
                 needsValueConfirmation(nextBill.due_date, nextBill.status) && (
                   <div className="inline-flex items-center gap-2 rounded-full border border-yellow-400/20 bg-yellow-400/10 px-4 py-2">
@@ -654,7 +641,6 @@ function Bills() {
         </Card>
       </motion.div>
 
-      {/* FEEDBACK SALVO */}
       <AnimatePresence>
         {savedBill && (
           <motion.div
@@ -669,7 +655,6 @@ function Bills() {
         )}
       </AnimatePresence>
 
-      {/* LISTA */}
       <section className="mt-6">
         <div className="mb-5 space-y-4">
           <div className="flex items-center justify-between">
@@ -695,7 +680,6 @@ function Bills() {
             </button>
           </div>
 
-          {/* FORMULÁRIO */}
           <AnimatePresence>
             {showNewBillForm && (
               <motion.div
@@ -713,7 +697,7 @@ function Bills() {
                         type="text"
                         value={billName}
                         onChange={(e) => setBillName(e.target.value)}
-                        placeholder="Ex: Psicóloga"
+                        placeholder="Ex: Netflix, Psicóloga..."
                         className="mt-2 w-full rounded-2xl border border-viggaGold/10 bg-black/20 px-4 py-3 text-viggaText outline-none placeholder:text-viggaMuted"
                       />
                     </div>
@@ -756,11 +740,7 @@ function Bills() {
                             key={r.value}
                             type="button"
                             onClick={() => setBillRecurrence(r.value)}
-                            className={`flex-1 rounded-2xl py-2.5 text-sm font-medium transition-colors ${
-                              billRecurrence === r.value
-                                ? "bg-viggaGold text-black"
-                                : "border border-viggaGold/10 bg-black/20 text-viggaMuted"
-                            }`}
+                            className={`flex-1 rounded-2xl py-2.5 text-sm font-medium transition-colors ${billRecurrence === r.value ? "bg-viggaGold text-black" : "border border-viggaGold/10 bg-black/20 text-viggaMuted"}`}
                           >
                             {r.label}
                           </button>
@@ -791,9 +771,17 @@ function Bills() {
                         value={billCategory}
                         onChange={(e) => setBillCategory(e.target.value)}
                         className="w-full rounded-2xl border border-viggaGold/10 bg-black/20 px-4 py-3 text-viggaText outline-none"
+                        style={{ color: "var(--color-viggaText, #e8e0cc)" }}
                       >
-                        {CATEGORIES.map((c) => (
-                          <option key={c} value={c}>
+                        {BASE_CATEGORIES.map((c) => (
+                          <option
+                            key={c}
+                            value={c}
+                            style={{
+                              backgroundColor: "#1a1a2e",
+                              color: "#e8e0cc",
+                            }}
+                          >
                             {c}
                           </option>
                         ))}
@@ -814,11 +802,7 @@ function Bills() {
                             key={m}
                             type="button"
                             onClick={() => setBillPaymentMethod(m)}
-                            className={`rounded-2xl py-3 text-sm font-medium transition-colors ${
-                              billPaymentMethod === m
-                                ? "bg-viggaGold text-black"
-                                : "border border-viggaGold/10 bg-black/20 text-viggaMuted"
-                            }`}
+                            className={`rounded-2xl py-3 text-sm font-medium transition-colors ${billPaymentMethod === m ? "bg-viggaGold text-black" : "border border-viggaGold/10 bg-black/20 text-viggaMuted"}`}
                           >
                             {m}
                           </button>
@@ -891,7 +875,7 @@ function Bills() {
                 >
                   <Card className="p-4 transition-opacity hover:opacity-90">
                     <div className="flex items-center justify-between gap-4">
-                      <div className="min-w-0">
+                      <div className="min-w-0 flex-1">
                         <p className="text-[10px] uppercase tracking-wider text-viggaMuted">
                           {formatDate(bill.due_date)}
                           {bill.category && (
@@ -908,13 +892,15 @@ function Bills() {
                         <h3 className="mt-1 truncate text-sm font-semibold text-viggaText">
                           {bill.name}
                         </h3>
-                        <div className="mt-0.5 flex items-center gap-2">
+                        <div className="mt-1 flex flex-wrap items-center gap-2">
+                          {bill.payment_method && (
+                            <PaymentBadge method={bill.payment_method} />
+                          )}
                           {bill.status === "pending" && (
                             <p className="text-[10px] text-viggaMuted">
                               {getDueLabel(bill.due_date, bill.status)}
                             </p>
                           )}
-                          {/* Alerta de confirmar valor */}
                           {needsValueConfirmation(
                             bill.due_date,
                             bill.status,
@@ -1005,11 +991,7 @@ function Bills() {
                     key={m}
                     type="button"
                     onClick={() => setPayMethod(m)}
-                    className={`rounded-2xl py-3 text-sm font-medium transition-colors ${
-                      payMethod === m
-                        ? "bg-viggaGold text-black"
-                        : "border border-viggaGold/10 bg-black/20 text-viggaMuted"
-                    }`}
+                    className={`rounded-2xl py-3 text-sm font-medium transition-colors ${payMethod === m ? "bg-viggaGold text-black" : "border border-viggaGold/10 bg-black/20 text-viggaMuted"}`}
                   >
                     {m}
                   </button>
@@ -1077,7 +1059,6 @@ function Bills() {
                   </button>
                 </div>
 
-                {/* Alerta no modal de edição */}
                 {needsValueConfirmation(
                   selectedBill.due_date,
                   selectedBill.status,
@@ -1085,7 +1066,7 @@ function Bills() {
                   <div className="mb-4 flex items-center gap-2 rounded-2xl border border-yellow-400/20 bg-yellow-400/10 px-4 py-3">
                     <AlertTriangle
                       size={16}
-                      className="text-yellow-400 shrink-0"
+                      className="shrink-0 text-yellow-400"
                     />
                     <p className="text-xs text-yellow-400">
                       Este vencimento está próximo. Confirme ou atualize o valor
@@ -1134,9 +1115,17 @@ function Bills() {
                       value={editBillCategory}
                       onChange={(e) => setEditBillCategory(e.target.value)}
                       className="w-full rounded-2xl border border-viggaGold/10 bg-black/20 px-4 py-3 text-viggaText outline-none"
+                      style={{ color: "var(--color-viggaText, #e8e0cc)" }}
                     >
-                      {CATEGORIES.map((c) => (
-                        <option key={c} value={c}>
+                      {BASE_CATEGORIES.map((c) => (
+                        <option
+                          key={c}
+                          value={c}
+                          style={{
+                            backgroundColor: "#1a1a2e",
+                            color: "#e8e0cc",
+                          }}
+                        >
                           {c}
                         </option>
                       ))}
@@ -1152,18 +1141,13 @@ function Bills() {
                           key={m}
                           type="button"
                           onClick={() => setEditBillPaymentMethod(m)}
-                          className={`rounded-2xl py-2.5 text-sm font-medium transition-colors ${
-                            editBillPaymentMethod === m
-                              ? "bg-viggaGold text-black"
-                              : "border border-viggaGold/10 bg-black/20 text-viggaMuted"
-                          }`}
+                          className={`rounded-2xl py-2.5 text-sm font-medium transition-colors ${editBillPaymentMethod === m ? "bg-viggaGold text-black" : "border border-viggaGold/10 bg-black/20 text-viggaMuted"}`}
                         >
                           {m}
                         </button>
                       ))}
                     </div>
                   </div>
-
                   {selectedBill.status === "pending" && (
                     <button
                       type="button"
@@ -1174,7 +1158,6 @@ function Bills() {
                       Registrar pagamento
                     </button>
                   )}
-
                   <button
                     type="button"
                     onClick={handleUpdateBill}
@@ -1182,7 +1165,6 @@ function Bills() {
                   >
                     Salvar alterações
                   </button>
-
                   <button
                     type="button"
                     onClick={handleDeleteBill}

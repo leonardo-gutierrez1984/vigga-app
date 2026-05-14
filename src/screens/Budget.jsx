@@ -51,6 +51,17 @@ function getMonthLabel(month) {
   return date.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
 }
 
+// Injeta CSS global uma única vez para esconder scrollbar webkit (Chrome, Safari, celular)
+if (
+  typeof document !== "undefined" &&
+  !document.getElementById("vigga-hide-scrollbar")
+) {
+  const el = document.createElement("style");
+  el.id = "vigga-hide-scrollbar";
+  el.textContent = `.vigga-months-scroll::-webkit-scrollbar { display: none; }`;
+  document.head.appendChild(el);
+}
+
 function Budget() {
   const { householdId } = useAuth();
   const navigate = useNavigate();
@@ -225,7 +236,6 @@ function Budget() {
         estimateAmount.replace(",", ".").replace(/[^\d.]/g, ""),
       );
 
-      // Se já existe estimativa para essa categoria neste mês, atualiza
       const existing = estimates.find((e) => e.category === estimateCategory);
       if (existing) {
         await supabase
@@ -274,19 +284,22 @@ function Budget() {
         </div>
         <motion.button
           whileTap={{ scale: 0.92 }}
-          onClick={() => navigate("/profile")}
+          onClick={() => navigate(-1)}
           className="flex h-10 w-10 items-center justify-center rounded-2xl border border-viggaGold/10 bg-viggaCard"
         >
-          <ArrowLeft
-            size={18}
-            className="text-viggaGold"
-            onClick={() => navigate(-1)}
-          />
+          <ArrowLeft size={18} className="text-viggaGold" />
         </motion.button>
       </header>
 
-      {/* SELETOR DE MÊS */}
-      <div className="mb-6 flex gap-2 overflow-x-auto pb-1">
+      {/* SELETOR DE MÊS
+          - classe "vigga-months-scroll" aplica o ::-webkit-scrollbar via CSS global injetado acima
+          - style inline cobre Firefox e IE/Edge antigo
+          - overflow-x-auto mantém o scroll funcionando normalmente
+      */}
+      <div
+        className="vigga-months-scroll mb-6 flex gap-2 overflow-x-auto pb-1"
+        style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
+      >
         {availableMonths.map((m) => (
           <button
             key={m}
@@ -311,71 +324,77 @@ function Budget() {
         animate={{ opacity: 1, y: 0 }}
         className="mb-6"
       >
-        <Card className="relative overflow-hidden p-6">
+        <Card className="relative overflow-hidden p-5">
           <div className="absolute right-[-40px] top-[-40px] h-32 w-32 rounded-full bg-viggaGold/10 blur-3xl" />
-          <p className="text-xs font-bold uppercase tracking-wider text-viggaMuted mb-4">
+
+          <p className="mb-4 text-xs font-bold uppercase tracking-wider text-viggaMuted">
             Resumo — {getMonthLabel(selectedMonth)}
           </p>
-          <div className="grid grid-cols-3 gap-3 text-center">
-            <div>
-              <p className="text-xs text-viggaMuted mb-1">Receitas</p>
-              <p className="text-lg font-bold text-viggaGreen">
+
+          {/* Três totais em linhas com divisores */}
+          <div className="mb-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <p className="text-sm text-viggaMuted">Receitas</p>
+              <p className="text-base font-bold text-viggaGreen">
                 {formatCurrency(totalIncome)}
               </p>
             </div>
-            <div>
-              <p className="text-xs text-viggaMuted mb-1">Estimado</p>
-              <p className="text-lg font-bold text-viggaGold">
+            <div className="h-px bg-viggaGold/10" />
+            <div className="flex items-center justify-between">
+              <p className="text-sm text-viggaMuted">Estimado</p>
+              <p className="text-base font-bold text-viggaGold">
                 {formatCurrency(totalEstimated)}
               </p>
             </div>
-            <div>
-              <p className="text-xs text-viggaMuted mb-1">Gasto real</p>
-              <p className="text-lg font-bold text-viggaText">
+            <div className="h-px bg-viggaGold/10" />
+            <div className="flex items-center justify-between">
+              <p className="text-sm text-viggaMuted">Gasto real</p>
+              <p className="text-base font-bold text-viggaText">
                 {formatCurrency(totalReal)}
               </p>
             </div>
           </div>
 
-          {/* Saldo */}
-          <div className="mt-4 grid grid-cols-2 gap-3">
+          {/* Saldos lado a lado */}
+          <div className="grid grid-cols-2 gap-3">
             <div
-              className={`rounded-2xl p-3 text-center ${balanceEstimated >= 0 ? "bg-viggaGreen/10" : "bg-red-400/10"}`}
+              className={`rounded-2xl p-3 ${balanceEstimated >= 0 ? "bg-viggaGreen/10" : "bg-red-400/10"}`}
             >
-              <p className="text-[10px] text-viggaMuted mb-1">Saldo previsto</p>
-              <div className="flex items-center justify-center gap-1">
+              <p className="mb-1 text-[10px] text-viggaMuted">Saldo previsto</p>
+              <div className="flex items-center gap-1">
                 {balanceEstimated >= 0 ? (
-                  <TrendingUp size={12} className="text-viggaGreen" />
+                  <TrendingUp size={12} className="shrink-0 text-viggaGreen" />
                 ) : (
-                  <TrendingDown size={12} className="text-red-400" />
+                  <TrendingDown size={12} className="shrink-0 text-red-400" />
                 )}
                 <p
-                  className={`text-sm font-bold ${balanceEstimated >= 0 ? "text-viggaGreen" : "text-red-400"}`}
+                  className={`text-sm font-bold leading-tight ${balanceEstimated >= 0 ? "text-viggaGreen" : "text-red-400"}`}
                 >
                   {formatCurrency(Math.abs(balanceEstimated))}
                 </p>
               </div>
-              <p className="text-[10px] text-viggaMuted mt-0.5">
+              <p className="mt-0.5 text-[10px] text-viggaMuted">
                 {balanceEstimated >= 0 ? "sobra" : "falta"}
               </p>
             </div>
+
             <div
-              className={`rounded-2xl p-3 text-center ${balanceReal >= 0 ? "bg-viggaGreen/10" : "bg-red-400/10"}`}
+              className={`rounded-2xl p-3 ${balanceReal >= 0 ? "bg-viggaGreen/10" : "bg-red-400/10"}`}
             >
-              <p className="text-[10px] text-viggaMuted mb-1">Saldo real</p>
-              <div className="flex items-center justify-center gap-1">
+              <p className="mb-1 text-[10px] text-viggaMuted">Saldo real</p>
+              <div className="flex items-center gap-1">
                 {balanceReal >= 0 ? (
-                  <TrendingUp size={12} className="text-viggaGreen" />
+                  <TrendingUp size={12} className="shrink-0 text-viggaGreen" />
                 ) : (
-                  <TrendingDown size={12} className="text-red-400" />
+                  <TrendingDown size={12} className="shrink-0 text-red-400" />
                 )}
                 <p
-                  className={`text-sm font-bold ${balanceReal >= 0 ? "text-viggaGreen" : "text-red-400"}`}
+                  className={`text-sm font-bold leading-tight ${balanceReal >= 0 ? "text-viggaGreen" : "text-red-400"}`}
                 >
                   {formatCurrency(Math.abs(balanceReal))}
                 </p>
               </div>
-              <p className="text-[10px] text-viggaMuted mt-0.5">
+              <p className="mt-0.5 text-[10px] text-viggaMuted">
                 {balanceReal >= 0 ? "sobra" : "falta"}
               </p>
             </div>
@@ -405,7 +424,7 @@ function Budget() {
               exit={{ opacity: 0, height: 0 }}
               className="mb-3 overflow-hidden"
             >
-              <Card className="p-4 space-y-3">
+              <Card className="space-y-3 p-4">
                 <input
                   type="text"
                   value={incomeDesc}
@@ -503,9 +522,9 @@ function Budget() {
               exit={{ opacity: 0, height: 0 }}
               className="mb-3 overflow-hidden"
             >
-              <Card className="p-4 space-y-3">
+              <Card className="space-y-3 p-4">
                 <div>
-                  <p className="mb-2 text-xs text-viggaMuted uppercase tracking-wider">
+                  <p className="mb-2 text-xs uppercase tracking-wider text-viggaMuted">
                     Categoria
                   </p>
                   <select

@@ -11,6 +11,7 @@ import {
   Trash2,
   Save,
   RefreshCw,
+  Plus,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ui } from "../styles/ui";
@@ -19,25 +20,43 @@ import FilterBar from "../components/FilterBar";
 import { applyTransactionFilters } from "../utils/filterUtils";
 import { useAuth } from "../contexts/AuthContext";
 
-const CATEGORIES = [
+const BASE_CATEGORIES = [
   "Assinaturas",
+  "Atividade Física",
   "Casa",
   "Combustível",
   "Contas",
+  "Cursos",
   "Delivery",
   "Escola",
   "Farmácia",
   "Geral",
   "Lazer",
   "Mercado",
-  "Outros",
   "Pets",
-  "Plano de Saúde",
-  "Atividade Física",
+  "Saúde",
   "Viagens",
+  "Outros",
 ];
 
 const PAYMENT_METHODS = ["Pix", "Crédito", "Dinheiro", "Não identificado"];
+
+const CUSTOM_CATEGORIES_KEY = "vigga_custom_categories";
+
+function loadCustomCategories() {
+  try {
+    const raw = localStorage.getItem(CUSTOM_CATEGORIES_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveCustomCategories(cats) {
+  try {
+    localStorage.setItem(CUSTOM_CATEGORIES_KEY, JSON.stringify(cats));
+  } catch {}
+}
 
 const DEFAULT_FILTERS = {
   search: "",
@@ -75,6 +94,30 @@ const Launch = () => {
   const [isSavingRecurrence, setIsSavingRecurrence] = useState(false);
 
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
+
+  // Categorias personalizadas (salvas no localStorage)
+  const [customCategories, setCustomCategories] =
+    useState(loadCustomCategories);
+
+  // Controle do campo "Outros" personalizado — no modal de edição
+  const [editCustomCategory, setEditCustomCategory] = useState("");
+  const [editIsCustom, setEditIsCustom] = useState(false);
+
+  // Todas as categorias = base + personalizadas (sem duplicar "Outros" no meio)
+  const allCategories = useMemo(() => {
+    const base = BASE_CATEGORIES.filter((c) => c !== "Outros");
+    const customs = customCategories.filter((c) => !base.includes(c));
+    return [...base, ...customs, "Outros"];
+  }, [customCategories]);
+
+  function addCustomCategory(name) {
+    const trimmed = name.trim();
+    if (!trimmed || allCategories.includes(trimmed)) return trimmed;
+    const updated = [...customCategories, trimmed];
+    setCustomCategories(updated);
+    saveCustomCategories(updated);
+    return trimmed;
+  }
 
   const hasActiveFilters = useMemo(() => {
     return (
@@ -117,6 +160,19 @@ const Launch = () => {
     fetchTransactions();
   }, [hasActiveFilters]);
 
+  // Quando abre edição, detecta se a categoria atual é personalizada
+  useEffect(() => {
+    if (!isEditing) return;
+    if (BASE_CATEGORIES.includes(editCategory)) {
+      setEditIsCustom(false);
+      setEditCustomCategory("");
+    } else {
+      // categoria personalizada já salva
+      setEditIsCustom(true);
+      setEditCustomCategory(editCategory);
+    }
+  }, [isEditing]);
+
   const filteredTransactions = useMemo(() => {
     if (!hasActiveFilters) return transactions;
     return applyTransactionFilters(transactions, filters);
@@ -151,11 +207,15 @@ const Launch = () => {
     setEditCategory(transaction.category || "Geral");
     setEditPaymentMethod(transaction.payment_method || "Não identificado");
     setEditDate(transaction.transaction_date || "");
+    setEditIsCustom(false);
+    setEditCustomCategory("");
   }
 
   function closeTransactionDetails() {
     setSelectedTransaction(null);
     setIsEditing(false);
+    setEditIsCustom(false);
+    setEditCustomCategory("");
   }
 
   function parseLaunchText(text) {
@@ -183,10 +243,9 @@ const Launch = () => {
       category = "Farmácia";
     if (/netflix|spotify|disney|prime|youtube|assinatura/i.test(normalizedText))
       category = "Assinaturas";
-    if (
-      /mensalidade|escola|faculdade|curso|colegio|colégio/i.test(normalizedText)
-    )
+    if (/mensalidade|escola|faculdade|colegio|colégio/i.test(normalizedText))
       category = "Escola";
+    if (/curso|workshop|treinamento/i.test(normalizedText)) category = "Cursos";
     if (
       /academia|ginástica|ginastica|natação|natacao|crossfit|atividade/i.test(
         normalizedText,
@@ -194,11 +253,11 @@ const Launch = () => {
     )
       category = "Atividade Física";
     if (
-      /unimed|plano de saúde|plano saude|convenio|convênio|medico|médico/i.test(
+      /unimed|plano de saúde|plano saude|convenio|convênio|medico|médico|psicologo|psicóloga|psicopedagoga|terapeuta/i.test(
         normalizedText,
       )
     )
-      category = "Plano de Saúde";
+      category = "Saúde";
     if (
       /luz|água|agua|internet|telefone|celular|conta de/i.test(normalizedText)
     )
@@ -362,6 +421,18 @@ const Launch = () => {
     }
   }
 
+  // Resolve a categoria final ao salvar edição
+  function resolveEditCategory() {
+    if (
+      editCategory === "Outros" &&
+      editIsCustom &&
+      editCustomCategory.trim()
+    ) {
+      return addCustomCategory(editCustomCategory.trim());
+    }
+    return editCategory;
+  }
+
   async function handleSaveEdit() {
     if (!selectedTransaction || !editDescription.trim() || !editAmount.trim())
       return;
@@ -370,12 +441,14 @@ const Launch = () => {
       const parsedAmount = Number(
         editAmount.replace(",", ".").replace(/[^\d.]/g, ""),
       );
+      const finalCategory = resolveEditCategory();
+
       const { data, error } = await supabase
         .from("transactions")
         .update({
           description: editDescription,
           amount: parsedAmount,
-          category: editCategory,
+          category: finalCategory,
           payment_method: editPaymentMethod,
           transaction_date: editDate,
         })
@@ -596,7 +669,6 @@ const Launch = () => {
                   </motion.button>
                 ))}
 
-                {/* BOTÃO VER MAIS / VER MENOS */}
                 {!hasActiveFilters &&
                   filteredTransactions.length > INITIAL_TX_COUNT && (
                     <motion.button
@@ -680,7 +752,6 @@ const Launch = () => {
               <p className="mb-3 text-sm text-viggaMuted">
                 Este lançamento se repete todo mês?
               </p>
-
               <div className="grid grid-cols-2 gap-3">
                 <button
                   type="button"
@@ -712,7 +783,7 @@ const Launch = () => {
         )}
       </AnimatePresence>
 
-      {/* MODAL DE DETALHES */}
+      {/* MODAL DE DETALHES / EDIÇÃO */}
       <AnimatePresence>
         {selectedTransaction && (
           <motion.div
@@ -753,6 +824,7 @@ const Launch = () => {
               </div>
 
               <div className="space-y-3">
+                {/* Descrição */}
                 <div className="rounded-2xl bg-black/20 p-4">
                   <p className="text-xs uppercase tracking-[0.18em] text-viggaMuted">
                     Descrição
@@ -772,28 +844,81 @@ const Launch = () => {
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
+                  {/* Categoria */}
                   <div className="rounded-2xl bg-black/20 p-4">
                     <p className="text-xs uppercase tracking-[0.18em] text-viggaMuted">
                       Categoria
                     </p>
                     {isEditing ? (
-                      <select
-                        value={editCategory}
-                        onChange={(e) => setEditCategory(e.target.value)}
-                        className="mt-2 w-full bg-transparent text-sm text-viggaText outline-none"
-                      >
-                        {CATEGORIES.map((cat) => (
-                          <option key={cat} value={cat}>
-                            {cat}
-                          </option>
-                        ))}
-                      </select>
+                      <div className="mt-2">
+                        <select
+                          value={editIsCustom ? "Outros" : editCategory}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            if (val === "Outros") {
+                              setEditIsCustom(true);
+                              setEditCategory("Outros");
+                              setEditCustomCategory("");
+                            } else {
+                              setEditIsCustom(false);
+                              setEditCategory(val);
+                              setEditCustomCategory("");
+                            }
+                          }}
+                          className="w-full bg-transparent text-sm text-viggaText outline-none"
+                          style={{ color: "var(--color-viggaText, #e8e0cc)" }}
+                        >
+                          {allCategories.map((cat) => (
+                            <option
+                              key={cat}
+                              value={cat}
+                              style={{
+                                backgroundColor: "#1a1a2e",
+                                color: "#e8e0cc",
+                              }}
+                            >
+                              {cat}
+                            </option>
+                          ))}
+                        </select>
+                        {/* Campo livre quando "Outros" selecionado */}
+                        <AnimatePresence>
+                          {editIsCustom && (
+                            <motion.div
+                              initial={{ opacity: 0, height: 0 }}
+                              animate={{ opacity: 1, height: "auto" }}
+                              exit={{ opacity: 0, height: 0 }}
+                              className="mt-2 overflow-hidden"
+                            >
+                              <div className="flex items-center gap-1">
+                                <input
+                                  type="text"
+                                  value={editCustomCategory}
+                                  onChange={(e) =>
+                                    setEditCustomCategory(e.target.value)
+                                  }
+                                  placeholder="Nome da categoria..."
+                                  className="flex-1 bg-transparent text-xs text-viggaText outline-none placeholder:text-viggaMuted/60"
+                                  autoFocus
+                                />
+                                <Plus
+                                  size={12}
+                                  className="text-viggaGold shrink-0"
+                                />
+                              </div>
+                              <div className="mt-1 h-px bg-viggaGold/20" />
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </div>
                     ) : (
                       <p className="mt-2 text-sm text-viggaText">
                         {selectedTransaction.category || "Geral"}
                       </p>
                     )}
                   </div>
+
+                  {/* Forma de pagamento */}
                   <div className="rounded-2xl bg-black/20 p-4">
                     <p className="text-xs uppercase tracking-[0.18em] text-viggaMuted">
                       Forma
@@ -803,9 +928,17 @@ const Launch = () => {
                         value={editPaymentMethod}
                         onChange={(e) => setEditPaymentMethod(e.target.value)}
                         className="mt-2 w-full bg-transparent text-sm text-viggaText outline-none"
+                        style={{ color: "var(--color-viggaText, #e8e0cc)" }}
                       >
                         {PAYMENT_METHODS.map((m) => (
-                          <option key={m} value={m}>
+                          <option
+                            key={m}
+                            value={m}
+                            style={{
+                              backgroundColor: "#1a1a2e",
+                              color: "#e8e0cc",
+                            }}
+                          >
                             {m}
                           </option>
                         ))}
@@ -820,6 +953,7 @@ const Launch = () => {
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
+                  {/* Valor */}
                   <div className="rounded-2xl bg-black/20 p-4">
                     <p className="text-xs uppercase tracking-[0.18em] text-viggaMuted">
                       Valor
@@ -838,6 +972,8 @@ const Launch = () => {
                       </p>
                     )}
                   </div>
+
+                  {/* Data */}
                   <div className="rounded-2xl bg-black/20 p-4">
                     <p className="text-xs uppercase tracking-[0.18em] text-viggaMuted">
                       Data
