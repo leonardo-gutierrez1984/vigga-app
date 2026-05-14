@@ -19,6 +19,7 @@ import BottomNav from "../components/BottomNav";
 import FilterBar from "../components/FilterBar";
 import { applyTransactionFilters } from "../utils/filterUtils";
 import { useAuth } from "../contexts/AuthContext";
+import { parseLaunchText } from "../utils/categoryParser";
 
 const BASE_CATEGORIES = [
   "Assinaturas",
@@ -35,6 +36,8 @@ const BASE_CATEGORIES = [
   "Mercado",
   "Pets",
   "Saúde",
+  "Transporte",
+  "Vestuário",
   "Viagens",
   "Outros",
 ];
@@ -95,15 +98,11 @@ const Launch = () => {
 
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
 
-  // Categorias personalizadas (salvas no localStorage)
   const [customCategories, setCustomCategories] =
     useState(loadCustomCategories);
-
-  // Controle do campo "Outros" personalizado — no modal de edição
   const [editCustomCategory, setEditCustomCategory] = useState("");
   const [editIsCustom, setEditIsCustom] = useState(false);
 
-  // Todas as categorias = base + personalizadas (sem duplicar "Outros" no meio)
   const allCategories = useMemo(() => {
     const base = BASE_CATEGORIES.filter((c) => c !== "Outros");
     const customs = customCategories.filter((c) => !base.includes(c));
@@ -160,14 +159,12 @@ const Launch = () => {
     fetchTransactions();
   }, [hasActiveFilters]);
 
-  // Quando abre edição, detecta se a categoria atual é personalizada
   useEffect(() => {
     if (!isEditing) return;
     if (BASE_CATEGORIES.includes(editCategory)) {
       setEditIsCustom(false);
       setEditCustomCategory("");
     } else {
-      // categoria personalizada já salva
       setEditIsCustom(true);
       setEditCustomCategory(editCategory);
     }
@@ -216,124 +213,6 @@ const Launch = () => {
     setIsEditing(false);
     setEditIsCustom(false);
     setEditCustomCategory("");
-  }
-
-  function parseLaunchText(text) {
-    const normalizedText = text.toLowerCase().trim();
-
-    const amountMatch = normalizedText.match(
-      /\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?|\d+/,
-    );
-    const amount = amountMatch
-      ? parseFloat(amountMatch[0].replace(",", "."))
-      : 0;
-
-    let category = "Geral";
-    if (/mercado|supermercado|condor/i.test(normalizedText))
-      category = "Mercado";
-    if (/ifood|rappi|delivery|lanche|hamburguer|pizza/i.test(normalizedText))
-      category = "Delivery";
-    if (/combustível|combustivel|gasolina|posto|etanol/i.test(normalizedText))
-      category = "Combustível";
-    if (
-      /farmacia|farmácia|remedio|remédio|medicamento|drogaria/i.test(
-        normalizedText,
-      )
-    )
-      category = "Farmácia";
-    if (/netflix|spotify|disney|prime|youtube|assinatura/i.test(normalizedText))
-      category = "Assinaturas";
-    if (/mensalidade|escola|faculdade|colegio|colégio/i.test(normalizedText))
-      category = "Escola";
-    if (/curso|workshop|treinamento/i.test(normalizedText)) category = "Cursos";
-    if (
-      /academia|ginástica|ginastica|natação|natacao|crossfit|atividade/i.test(
-        normalizedText,
-      )
-    )
-      category = "Atividade Física";
-    if (
-      /unimed|plano de saúde|plano saude|convenio|convênio|medico|médico|psicologo|psicóloga|psicopedagoga|terapeuta/i.test(
-        normalizedText,
-      )
-    )
-      category = "Saúde";
-    if (
-      /luz|água|agua|internet|telefone|celular|conta de/i.test(normalizedText)
-    )
-      category = "Contas";
-    if (
-      /aluguel|condominio|condomínio|reforma|casa|merceria/i.test(
-        normalizedText,
-      )
-    )
-      category = "Casa";
-    if (/cinema|teatro|show|ingresso|lazer|parque/i.test(normalizedText))
-      category = "Lazer";
-    if (/pet|petshop|ração|racao|veterinario|veterinário/i.test(normalizedText))
-      category = "Pets";
-    if (/viagem|hotel|passagem|airbnb|hostel/i.test(normalizedText))
-      category = "Viagens";
-
-    let paymentMethod = "Não identificado";
-    if (/pix/i.test(normalizedText)) paymentMethod = "Pix";
-    if (/cartão|cartao|credito|crédito/i.test(normalizedText))
-      paymentMethod = "Crédito";
-    if (/dinheiro/i.test(normalizedText)) paymentMethod = "Dinheiro";
-
-    let transactionDate = new Date();
-    let detectedDate = null;
-
-    if (/ontem/i.test(normalizedText)) {
-      transactionDate.setDate(transactionDate.getDate() - 1);
-    }
-
-    const dateMatch = normalizedText.match(
-      /(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?/,
-    );
-    if (dateMatch) {
-      const day = parseInt(dateMatch[1]);
-      const month = parseInt(dateMatch[2]) - 1;
-      const year = dateMatch[3]
-        ? dateMatch[3].length === 2
-          ? 2000 + parseInt(dateMatch[3])
-          : parseInt(dateMatch[3])
-        : new Date().getFullYear();
-      transactionDate = new Date(year, month, day);
-      detectedDate = true;
-    }
-
-    const formattedDate = transactionDate.toISOString().split("T")[0];
-
-    let cleanDescription = normalizedText;
-    cleanDescription = cleanDescription.replace(
-      /\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?|\d+/g,
-      "",
-    );
-    cleanDescription = cleanDescription.replace(
-      /\bpix\b|\bcartão\b|\bcartao\b|\bcredito\b|\bcrédito\b|\bdinheiro\b/g,
-      "",
-    );
-    cleanDescription = cleanDescription.replace(/\bontem\b|\bhoje\b/g, "");
-    cleanDescription = cleanDescription.replace(
-      /\d{1,2}\/\d{1,2}(?:\/\d{2,4})?/g,
-      "",
-    );
-    cleanDescription = cleanDescription.replace(/\s+/g, " ").trim();
-    cleanDescription =
-      cleanDescription.charAt(0).toUpperCase() + cleanDescription.slice(1);
-
-    return {
-      description: cleanDescription || "Lançamento",
-      amount,
-      category,
-      payment_method: paymentMethod,
-      type: "expense",
-      transaction_date: formattedDate,
-      source: "manual",
-      notes: null,
-      detectedDate,
-    };
   }
 
   async function handleRegister() {
@@ -421,7 +300,6 @@ const Launch = () => {
     }
   }
 
-  // Resolve a categoria final ao salvar edição
   function resolveEditCategory() {
     if (
       editCategory === "Outros" &&
@@ -499,11 +377,10 @@ const Launch = () => {
       </header>
 
       <div className="space-y-6">
-        {/* CARD DE INPUT */}
         <div className={`${ui.card} border-viggaGold/10 p-5`}>
           <textarea
             className="w-full resize-none border-none bg-transparent p-0 text-lg text-viggaText placeholder:text-viggaMuted focus:ring-0"
-            placeholder="Ex: mercado 120,00 no pix... ou netflix 55 crédito 15/05"
+            placeholder="Ex: Panvel 45 pix... ou Uber 22 crédito"
             rows="3"
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -559,7 +436,6 @@ const Launch = () => {
           </div>
         </div>
 
-        {/* FEEDBACK DE SUCESSO */}
         <AnimatePresence>
           {lastSaved && (
             <motion.div
@@ -569,12 +445,14 @@ const Launch = () => {
               className="flex items-center gap-3 rounded-2xl border border-viggaGreen/20 bg-viggaGreen/10 p-4 text-sm text-viggaGreen"
             >
               <CheckCircle2 size={18} />
-              <span>Lançamento registrado com sucesso!</span>
+              <span>
+                Lançamento registrado em{" "}
+                <strong>{lastSaved.category || "Geral"}</strong>!
+              </span>
             </motion.div>
           )}
         </AnimatePresence>
 
-        {/* HISTÓRICO + FILTROS */}
         <div className="mt-8">
           <div className="mb-4 flex items-center justify-between px-1">
             <div className="flex items-center gap-2 text-viggaMuted">
@@ -824,7 +702,6 @@ const Launch = () => {
               </div>
 
               <div className="space-y-3">
-                {/* Descrição */}
                 <div className="rounded-2xl bg-black/20 p-4">
                   <p className="text-xs uppercase tracking-[0.18em] text-viggaMuted">
                     Descrição
@@ -844,7 +721,6 @@ const Launch = () => {
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
-                  {/* Categoria */}
                   <div className="rounded-2xl bg-black/20 p-4">
                     <p className="text-xs uppercase tracking-[0.18em] text-viggaMuted">
                       Categoria
@@ -881,7 +757,6 @@ const Launch = () => {
                             </option>
                           ))}
                         </select>
-                        {/* Campo livre quando "Outros" selecionado */}
                         <AnimatePresence>
                           {editIsCustom && (
                             <motion.div
@@ -903,7 +778,7 @@ const Launch = () => {
                                 />
                                 <Plus
                                   size={12}
-                                  className="text-viggaGold shrink-0"
+                                  className="shrink-0 text-viggaGold"
                                 />
                               </div>
                               <div className="mt-1 h-px bg-viggaGold/20" />
@@ -918,7 +793,6 @@ const Launch = () => {
                     )}
                   </div>
 
-                  {/* Forma de pagamento */}
                   <div className="rounded-2xl bg-black/20 p-4">
                     <p className="text-xs uppercase tracking-[0.18em] text-viggaMuted">
                       Forma
@@ -953,7 +827,6 @@ const Launch = () => {
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
-                  {/* Valor */}
                   <div className="rounded-2xl bg-black/20 p-4">
                     <p className="text-xs uppercase tracking-[0.18em] text-viggaMuted">
                       Valor
@@ -973,7 +846,6 @@ const Launch = () => {
                     )}
                   </div>
 
-                  {/* Data */}
                   <div className="rounded-2xl bg-black/20 p-4">
                     <p className="text-xs uppercase tracking-[0.18em] text-viggaMuted">
                       Data

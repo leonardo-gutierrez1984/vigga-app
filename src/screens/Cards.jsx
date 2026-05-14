@@ -36,17 +36,14 @@ function Cards() {
 
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
 
-  // ── MODAL PAGAR FATURA ────────────────────────
   const [showPayInvoiceModal, setShowPayInvoiceModal] = useState(false);
-  const [paymentType, setPaymentType] = useState("total"); // "total" | "partial"
+  const [paymentType, setPaymentType] = useState("total");
   const [partialAmount, setPartialAmount] = useState("");
   const [isSavingPayment, setIsSavingPayment] = useState(false);
   const [paymentSuccess, setPaymentSuccess] = useState(false);
 
-  // ─────────────────────────────────────────────
-  // BUSCA
-  // ─────────────────────────────────────────────
   async function fetchCardData() {
+    if (!householdId) return;
     try {
       setIsLoading(true);
 
@@ -64,7 +61,12 @@ function Cards() {
           .eq("payment_method", "Crédito")
           .eq("household_id", householdId)
           .order("transaction_date", { ascending: false }),
-        supabase.from("credit_cards").select("*").limit(1).single(),
+        supabase
+          .from("credit_cards")
+          .select("*")
+          .eq("household_id", householdId)
+          .limit(1)
+          .single(),
         supabase
           .from("card_payments")
           .select("*")
@@ -74,7 +76,8 @@ function Cards() {
 
       if (transactionsError)
         console.error("Erro ao buscar lançamentos:", transactionsError);
-      if (cardsError) console.error("Erro ao buscar cartão:", cardsError);
+      if (cardsError && cardsError.code !== "PGRST116")
+        console.error("Erro ao buscar cartão:", cardsError);
 
       setTransactions(transactionsData || []);
       setCardData(cardsData || null);
@@ -93,13 +96,11 @@ function Cards() {
     }
   }
 
+  // ✅ householdId na dependência — garante que a query roda quando ele estiver disponível
   useEffect(() => {
     fetchCardData();
-  }, []);
+  }, [householdId]);
 
-  // ─────────────────────────────────────────────
-  // FORMATADORES
-  // ─────────────────────────────────────────────
   function formatCurrency(value) {
     return Number(value || 0).toLocaleString("pt-BR", {
       style: "currency",
@@ -115,9 +116,6 @@ function Cards() {
     });
   }
 
-  // ─────────────────────────────────────────────
-  // CÁLCULOS
-  // ─────────────────────────────────────────────
   const currentMonthCreditTransactions = useMemo(() => {
     const now = new Date();
     return transactions.filter((t) => {
@@ -142,7 +140,6 @@ function Cards() {
     return applyTransactionFilters(base, filters);
   }, [transactions, currentMonthCreditTransactions, filters, hasActiveFilters]);
 
-  // Total bruto da fatura do mês
   const grossInvoice = useMemo(() => {
     return currentMonthCreditTransactions.reduce(
       (total, t) => total + Number(t.amount || 0),
@@ -150,12 +147,10 @@ function Cards() {
     );
   }, [currentMonthCreditTransactions]);
 
-  // Total já pago neste mês
   const totalPaid = useMemo(() => {
     return cardPayments.reduce((sum, p) => sum + Number(p.amount || 0), 0);
   }, [cardPayments]);
 
-  // Fatura líquida (pendente de pagamento)
   const currentInvoice = useMemo(() => {
     return Math.max(grossInvoice - totalPaid, 0);
   }, [grossInvoice, totalPaid]);
@@ -167,9 +162,6 @@ function Cards() {
       : 0;
   const availableLimit = cardLimit - currentInvoice;
 
-  // ─────────────────────────────────────────────
-  // PAGAR FATURA
-  // ─────────────────────────────────────────────
   async function handlePayInvoice() {
     if (!cardData) return;
 
@@ -205,7 +197,6 @@ function Cards() {
       setPaymentSuccess(true);
       setPartialAmount("");
       setPaymentType("total");
-
       await fetchCardData();
 
       setTimeout(() => {
@@ -219,9 +210,6 @@ function Cards() {
     }
   }
 
-  // ─────────────────────────────────────────────
-  // SALVAR EDIÇÃO DO CARTÃO
-  // ─────────────────────────────────────────────
   async function handleSaveCard() {
     try {
       const { error } = await supabase
@@ -250,9 +238,6 @@ function Cards() {
     ? filteredTransactions
     : filteredTransactions.slice(0, INITIAL_COUNT);
 
-  // ─────────────────────────────────────────────
-  // RENDER
-  // ─────────────────────────────────────────────
   return (
     <div className="min-h-screen px-5 pb-56 pt-8">
       <header>
@@ -260,7 +245,6 @@ function Cards() {
         <h1 className={ui.title}>Seu futuro financeiro.</h1>
       </header>
 
-      {/* CARD PRINCIPAL */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -281,7 +265,6 @@ function Cards() {
             </div>
           </div>
 
-          {/* Botões de ação */}
           <div className="mt-6 flex gap-2">
             <button
               type="button"
@@ -303,14 +286,12 @@ function Cards() {
             )}
           </div>
 
-          {/* Fatura */}
           <div className="mt-8">
             <p className={ui.eyebrow}>Fatura atual</p>
             <h3 className="mt-2 text-5xl font-semibold tracking-tight">
               {isLoading ? "..." : formatCurrency(currentInvoice)}
             </h3>
 
-            {/* Se houve pagamento parcial, mostra detalhes */}
             {totalPaid > 0 && (
               <div className="mt-3 rounded-2xl bg-black/20 px-4 py-3">
                 <div className="flex items-center justify-between text-xs">
@@ -344,7 +325,6 @@ function Cards() {
             </div>
           </div>
 
-          {/* Limite */}
           <div className="mt-8">
             <div className="flex items-center justify-between">
               <p className={ui.eyebrow}>Limite utilizado</p>
@@ -357,7 +337,13 @@ function Cards() {
                 initial={{ width: 0 }}
                 animate={{ width: `${usedLimitPercentage}%` }}
                 transition={{ duration: 1 }}
-                className={`h-full rounded-full ${usedLimitPercentage >= 90 ? "bg-red-400" : usedLimitPercentage >= 70 ? "bg-yellow-400" : "bg-viggaGold"}`}
+                className={`h-full rounded-full ${
+                  usedLimitPercentage >= 90
+                    ? "bg-red-400"
+                    : usedLimitPercentage >= 70
+                      ? "bg-yellow-400"
+                      : "bg-viggaGold"
+                }`}
               />
             </div>
             <p className="mt-3 text-sm text-viggaMuted">
@@ -420,6 +406,11 @@ function Cards() {
                     <div className="min-w-0">
                       <p className="text-[10px] uppercase tracking-wider text-viggaMuted">
                         {formatDate(transaction.transaction_date)}
+                        {transaction.source === "bill_credit" && (
+                          <span className="ml-2 text-blue-400">
+                            • Vencimento
+                          </span>
+                        )}
                       </p>
                       <h3 className="mt-1 truncate text-sm font-semibold">
                         {transaction.description}
@@ -471,7 +462,6 @@ function Cards() {
               className="w-full max-w-[430px] rounded-[2rem] border border-viggaGold/10 bg-viggaCard p-5 shadow-2xl"
             >
               {paymentSuccess ? (
-                /* Tela de sucesso */
                 <motion.div
                   initial={{ opacity: 0, scale: 0.9 }}
                   animate={{ opacity: 1, scale: 1 }}
@@ -512,7 +502,6 @@ function Cards() {
                     </button>
                   </div>
 
-                  {/* Tipo de pagamento */}
                   <p className="mb-3 text-sm text-viggaMuted">
                     Como vai pagar?
                   </p>
@@ -539,7 +528,6 @@ function Cards() {
                     ))}
                   </div>
 
-                  {/* Campo valor parcial */}
                   <AnimatePresence>
                     {paymentType === "partial" && (
                       <motion.div
@@ -595,7 +583,7 @@ function Cards() {
         )}
       </AnimatePresence>
 
-      {/* MODAL DE EDIÇÃO DO CARTÃO */}
+      {/* MODAL EDIÇÃO DO CARTÃO */}
       <AnimatePresence>
         {isEditingCard && (
           <motion.div
