@@ -15,6 +15,7 @@ import Profile from "./screens/Profile";
 import Goals from "./screens/Goals";
 import Report from "./screens/Report";
 import Calculator from "./screens/Calculator";
+import Budget from "./screens/Budget";
 
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 
@@ -67,7 +68,6 @@ function AppRoutes() {
   return (
     <>
       <AnimatePresence>{showSplash && <SplashScreen />}</AnimatePresence>
-
       <Routes>
         <Route
           path="/login"
@@ -140,6 +140,10 @@ function AppRoutes() {
           element={
             !isLoggedIn ? <Navigate to="/login" replace /> : <Calculator />
           }
+        />
+        <Route
+          path="/budget"
+          element={!isLoggedIn ? <Navigate to="/login" replace /> : <Budget />}
         />
       </Routes>
     </>

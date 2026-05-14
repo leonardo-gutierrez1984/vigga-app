@@ -1,32 +1,12 @@
-import { Home, Plus, CreditCard, Calendar, Target } from "lucide-react";
+import { Home, Plus, CreditCard, Calendar, PiggyBank } from "lucide-react";
 import { NavLink } from "react-router-dom";
 
 const items = [
-  {
-    to: "/",
-    icon: Home,
-    label: "Início",
-  },
-  {
-    to: "/launch",
-    icon: Plus,
-    label: "Lançar",
-  },
-  {
-    to: "/cards",
-    icon: CreditCard,
-    label: "Cartões",
-  },
-  {
-    to: "/bills",
-    icon: Calendar,
-    label: "Vencimentos",
-  },
-  {
-    to: "/goals",
-    icon: Target,
-    label: "Metas",
-  },
+  { to: "/", icon: Home, label: "Início" },
+  { to: "/launch", icon: Plus, label: "Lançar" },
+  { to: "/cards", icon: CreditCard, label: "Cartões" },
+  { to: "/bills", icon: Calendar, label: "Vencimentos" },
+  { to: "/budget", icon: PiggyBank, label: "Orçamento" },
 ];
 
 function BottomNav() {
