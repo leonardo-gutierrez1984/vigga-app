@@ -14,6 +14,7 @@ import Household from "./screens/Household";
 import Profile from "./screens/Profile";
 import Goals from "./screens/Goals";
 import Report from "./screens/Report";
+import Calculator from "./screens/Calculator";
 
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 
@@ -68,7 +69,6 @@ function AppRoutes() {
       <AnimatePresence>{showSplash && <SplashScreen />}</AnimatePresence>
 
       <Routes>
-        {/* PÚBLICAS */}
         <Route
           path="/login"
           element={!isLoggedIn ? <Login /> : <Navigate to="/" replace />}
@@ -77,8 +77,6 @@ function AppRoutes() {
           path="/register"
           element={!isLoggedIn ? <Register /> : <Navigate to="/" replace />}
         />
-
-        {/* GRUPO FAMILIAR */}
         <Route
           path="/household"
           element={
@@ -91,8 +89,6 @@ function AppRoutes() {
             )
           }
         />
-
-        {/* PRIVADAS */}
         <Route
           path="/"
           element={
@@ -138,6 +134,12 @@ function AppRoutes() {
         <Route
           path="/report"
           element={!isLoggedIn ? <Navigate to="/login" replace /> : <Report />}
+        />
+        <Route
+          path="/calculator"
+          element={
+            !isLoggedIn ? <Navigate to="/login" replace /> : <Calculator />
+          }
         />
       </Routes>
     </>

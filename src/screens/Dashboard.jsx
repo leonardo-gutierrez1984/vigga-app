@@ -7,6 +7,9 @@ import {
   FileBarChart,
   Sparkles,
   RefreshCw,
+  ShoppingCart,
+  CreditCard,
+  List,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useNavigate } from "react-router-dom";
@@ -32,6 +35,14 @@ function formatHour(dateStr) {
   });
 }
 
+function formatDate(dateStr) {
+  if (!dateStr) return "";
+  return new Date(`${dateStr}T00:00:00`).toLocaleDateString("pt-BR", {
+    day: "2-digit",
+    month: "short",
+  });
+}
+
 function Dashboard() {
   const { userName, householdId } = useAuth();
   const navigate = useNavigate();
@@ -41,6 +52,7 @@ function Dashboard() {
   const [isLoading, setIsLoading] = useState(false);
   const [showTodayModal, setShowTodayModal] = useState(false);
   const [showAiModal, setShowAiModal] = useState(false);
+  const [showTotalModal, setShowTotalModal] = useState(false);
 
   const [aiText, setAiText] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
@@ -91,7 +103,18 @@ function Dashboard() {
 
   const currentMonthTransactions = useMemo(() => {
     const now = new Date();
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
     return transactions.filter((t) => {
+      if (t.source === "bill_credit") {
+        // Só entra no total a partir da data do vencimento
+        const dueDate = new Date(`${t.transaction_date}T00:00:00`);
+        const sameMonth =
+          dueDate.getMonth() === now.getMonth() &&
+          dueDate.getFullYear() === now.getFullYear();
+        return sameMonth && dueDate <= today;
+      }
       const d = new Date(t.created_at);
       return (
         d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear()
@@ -120,9 +143,52 @@ function Dashboard() {
     [currentMonthTransactions],
   );
 
-  const totalToday = useMemo(
-    () => todayTransactions.reduce((sum, t) => sum + Number(t.amount || 0), 0),
+  const totalMonthDebit = useMemo(
+    () =>
+      currentMonthTransactions
+        .filter((t) => t.payment_method !== "Crédito")
+        .reduce((sum, t) => sum + Number(t.amount || 0), 0),
+    [currentMonthTransactions],
+  );
+
+  const totalMonthCredit = useMemo(
+    () =>
+      currentMonthTransactions
+        .filter((t) => t.payment_method === "Crédito")
+        .reduce((sum, t) => sum + Number(t.amount || 0), 0),
+    [currentMonthTransactions],
+  );
+
+  // Listas separadas para o modal de detalhamento
+  const debitTransactions = useMemo(
+    () =>
+      currentMonthTransactions
+        .filter((t) => t.payment_method !== "Crédito")
+        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at)),
+    [currentMonthTransactions],
+  );
+
+  const creditTransactions = useMemo(
+    () =>
+      currentMonthTransactions
+        .filter((t) => t.payment_method === "Crédito")
+        .sort(
+          (a, b) =>
+            new Date(b.transaction_date || b.created_at) -
+            new Date(a.transaction_date || a.created_at),
+        ),
+    [currentMonthTransactions],
+  );
+
+  const todayDebitTransactions = useMemo(
+    () => todayTransactions.filter((t) => t.payment_method !== "Crédito"),
     [todayTransactions],
+  );
+
+  const totalToday = useMemo(
+    () =>
+      todayDebitTransactions.reduce((sum, t) => sum + Number(t.amount || 0), 0),
+    [todayDebitTransactions],
   );
 
   const goalsWithProgress = useMemo(() => {
@@ -145,7 +211,7 @@ function Dashboard() {
     {
       title: "Gastos hoje",
       value: formatCurrency(totalToday),
-      subtitle: "Lançamentos do dia",
+      subtitle: "Pix e Dinheiro",
       onClick: () => setShowTodayModal(true),
       clickable: true,
     },
@@ -247,6 +313,8 @@ function Dashboard() {
 
 DADOS DO MÊS ATUAL:
 - Total gasto: ${formatCurrency(totalMonth)}
+- Pix/Dinheiro: ${formatCurrency(totalMonthDebit)}
+- No crédito: ${formatCurrency(totalMonthCredit)}
 - Número de lançamentos: ${currentMonthTransactions.length}
 - Ticket médio: ${formatCurrency(avgPerTx)}
 - Maior gasto: ${biggestTx ? `${biggestTx.description} (${formatCurrency(biggestTx.amount)})` : "N/A"}
@@ -344,33 +412,74 @@ Seja direto, use linguagem simples e amigável. Não use markdown, asteriscos ou
         <Card className="relative mt-10 overflow-hidden p-6">
           <div className="absolute right-[-60px] top-[-60px] h-40 w-40 rounded-full bg-viggaGold/10 blur-3xl" />
 
-          {/* ← TEXTO ALTERADO */}
-          <p className="text-sm text-viggaMuted">Gasto este mês</p>
+          <p className="text-sm text-viggaMuted">Gasto total do mês</p>
           <h2 className="mt-3 text-5xl font-semibold tracking-tight">
             {isLoading ? "Carregando..." : formatCurrency(totalMonth)}
           </h2>
-          <p className="mt-3 text-sm leading-6 text-viggaMuted">
-            Soma dos lançamentos registrados neste mês.
+
+          {/* BREAKDOWN PIX/DINHEIRO + CRÉDITO */}
+          {!isLoading && totalMonth > 0 && (
+            <div className="mt-4 flex flex-wrap gap-2">
+              <div className="flex items-center gap-1.5 rounded-full border border-viggaGold/10 bg-black/20 px-3 py-1.5">
+                <div className="h-1.5 w-1.5 rounded-full bg-viggaGreen" />
+                <span className="text-[11px] text-viggaMuted">
+                  Pix/Dinheiro:{" "}
+                  <span className="font-medium text-viggaText">
+                    {formatCurrency(totalMonthDebit)}
+                  </span>
+                </span>
+              </div>
+              {totalMonthCredit > 0 && (
+                <div className="flex items-center gap-1.5 rounded-full border border-viggaGold/10 bg-black/20 px-3 py-1.5">
+                  <CreditCard size={10} className="text-blue-400" />
+                  <span className="text-[11px] text-viggaMuted">
+                    Crédito:{" "}
+                    <span className="font-medium text-blue-400">
+                      {formatCurrency(totalMonthCredit)}
+                    </span>
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+
+          <p className="mt-3 text-xs leading-5 text-viggaMuted">
+            Inclui todos os lançamentos do mês — Pix, Dinheiro e Crédito.
+            Vencimentos entram somente após o pagamento.
           </p>
 
-          {/* BADGE CLICÁVEL PARA ATUALIZAR */}
-          <motion.button
-            type="button"
-            whileTap={{ scale: 0.95 }}
-            onClick={fetchData}
-            disabled={isLoading}
-            className="mt-4 inline-flex items-center gap-2 rounded-full border border-viggaGold/10 bg-black/20 px-3 py-2 disabled:opacity-60"
-          >
-            <RefreshCw
-              size={10}
-              className={`text-viggaGreen ${isLoading ? "animate-spin" : ""}`}
-            />
-            <span className="text-xs text-viggaText">
-              {isLoading ? "Atualizando..." : "Toque para atualizar"}
-            </span>
-          </motion.button>
+          {/* BOTÕES ATUALIZAR + VER DETALHES */}
+          <div className="mt-4 flex items-center gap-2">
+            <motion.button
+              type="button"
+              whileTap={{ scale: 0.95 }}
+              onClick={fetchData}
+              disabled={isLoading}
+              className="inline-flex items-center gap-2 rounded-full border border-viggaGold/10 bg-black/20 px-3 py-2 disabled:opacity-60"
+            >
+              <RefreshCw
+                size={10}
+                className={`text-viggaGreen ${isLoading ? "animate-spin" : ""}`}
+              />
+              <span className="text-xs text-viggaText">
+                {isLoading ? "Atualizando..." : "Toque para atualizar"}
+              </span>
+            </motion.button>
 
-          {/* BOTÃO RELATÓRIO ← sem o mês */}
+            {currentMonthTransactions.length > 0 && (
+              <motion.button
+                type="button"
+                whileTap={{ scale: 0.95 }}
+                onClick={() => setShowTotalModal(true)}
+                className="inline-flex items-center gap-2 rounded-full border border-viggaGold/10 bg-black/20 px-3 py-2"
+              >
+                <List size={10} className="text-viggaGold" />
+                <span className="text-xs text-viggaGold">Ver composição</span>
+              </motion.button>
+            )}
+          </div>
+
+          {/* BOTÃO RELATÓRIO */}
           <motion.button
             whileTap={{ scale: 0.97 }}
             onClick={() => navigate("/report")}
@@ -458,16 +567,15 @@ Seja direto, use linguagem simples e amigável. Não use markdown, asteriscos ou
                     <p className="text-[11px] uppercase tracking-wider text-viggaMuted">
                       {new Date(`${bill.due_date}T00:00:00`).toLocaleDateString(
                         "pt-BR",
-                        {
-                          day: "2-digit",
-                          month: "long",
-                        },
+                        { day: "2-digit", month: "long" },
                       )}
                     </p>
                   </div>
                   <div className="text-right">
                     <p className="text-sm font-semibold text-viggaGold">
-                      {formatCurrency(bill.amount)}
+                      {bill.amount > 0
+                        ? formatCurrency(bill.amount)
+                        : "A definir"}
                     </p>
                     <p
                       className={`text-[11px] font-medium ${getDueLabelColor(bill.due_date)}`}
@@ -526,6 +634,184 @@ Seja direto, use linguagem simples e amigável. Não use markdown, asteriscos ou
         </motion.button>
       </motion.div>
 
+      {/* CALCULADORA DE COMPRAS */}
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: 0.35 }}
+        className="mt-4"
+      >
+        <motion.button
+          type="button"
+          whileTap={{ scale: 0.98 }}
+          onClick={() => navigate("/calculator")}
+          className="w-full text-left"
+        >
+          <Card className="relative overflow-hidden p-5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-viggaGold/10">
+                  <ShoppingCart size={16} className="text-viggaGold" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-viggaText">
+                    Calculadora de compras
+                  </p>
+                  <p className="text-xs text-viggaMuted">
+                    Simule antes de comprar
+                  </p>
+                </div>
+              </div>
+              <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-viggaGold/10 bg-black/20">
+                <ArrowRight size={14} className="text-viggaGold" />
+              </div>
+            </div>
+          </Card>
+        </motion.button>
+      </motion.div>
+
+      {/* MODAL COMPOSIÇÃO DO TOTAL */}
+      <AnimatePresence>
+        {showTotalModal && (
+          <motion.div
+            className="fixed inset-0 z-50 overflow-y-auto bg-black/70 backdrop-blur-sm"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setShowTotalModal(false)}
+          >
+            <div className="flex min-h-full items-start justify-center px-5 py-6 pb-32">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.96 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.96 }}
+                transition={{ duration: 0.22 }}
+                onClick={(e) => e.stopPropagation()}
+                className="w-full max-w-[430px] rounded-[2rem] border border-viggaGold/10 bg-viggaCard p-5 shadow-2xl"
+              >
+                {/* Cabeçalho */}
+                <div className="mb-5 flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-xs font-bold uppercase tracking-[0.18em] text-viggaGold">
+                      Este mês
+                    </p>
+                    <h2 className="mt-1 text-2xl font-semibold text-viggaText">
+                      {formatCurrency(totalMonth)}
+                    </h2>
+                    <p className="mt-1 text-xs text-viggaMuted">
+                      {currentMonthTransactions.length} lançamento
+                      {currentMonthTransactions.length !== 1 ? "s" : ""} no
+                      total
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowTotalModal(false)}
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-viggaGold/10 bg-black/20 text-viggaMuted"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+
+                {/* SEÇÃO PIX/DINHEIRO */}
+                {debitTransactions.length > 0 && (
+                  <div className="mb-4">
+                    <div className="mb-2 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <div className="h-2 w-2 rounded-full bg-viggaGreen" />
+                        <p className="text-xs font-bold uppercase tracking-wider text-viggaMuted">
+                          Pix / Dinheiro / Boleto
+                        </p>
+                      </div>
+                      <p className="text-xs font-semibold text-viggaText">
+                        {formatCurrency(totalMonthDebit)}
+                      </p>
+                    </div>
+                    <div className="space-y-1.5">
+                      {debitTransactions.map((t) => (
+                        <div
+                          key={t.id}
+                          className="flex items-center justify-between rounded-2xl bg-black/20 px-4 py-2.5"
+                        >
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-medium text-viggaText">
+                              {t.description}
+                            </p>
+                            <p className="mt-0.5 text-[10px] uppercase tracking-wider text-viggaMuted">
+                              {t.category || "Geral"} • {t.payment_method} •{" "}
+                              {formatDate(
+                                t.transaction_date ||
+                                  t.created_at?.split("T")[0],
+                              )}
+                            </p>
+                          </div>
+                          <p className="ml-3 shrink-0 text-sm font-semibold text-viggaText">
+                            {formatCurrency(t.amount)}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* SEÇÃO CRÉDITO */}
+                {creditTransactions.length > 0 && (
+                  <div>
+                    <div className="mb-2 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <CreditCard size={12} className="text-blue-400" />
+                        <p className="text-xs font-bold uppercase tracking-wider text-viggaMuted">
+                          Crédito
+                        </p>
+                      </div>
+                      <p className="text-xs font-semibold text-blue-400">
+                        {formatCurrency(totalMonthCredit)}
+                      </p>
+                    </div>
+                    <div className="space-y-1.5">
+                      {creditTransactions.map((t) => (
+                        <div
+                          key={t.id}
+                          className="flex items-center justify-between rounded-2xl bg-blue-400/5 border border-blue-400/10 px-4 py-2.5"
+                        >
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-medium text-viggaText">
+                              {t.description}
+                            </p>
+                            <p className="mt-0.5 text-[10px] uppercase tracking-wider text-viggaMuted">
+                              {t.category || "Geral"} •{" "}
+                              {t.source === "bill_credit"
+                                ? "Vencimento futuro"
+                                : "Crédito"}{" "}
+                              •{" "}
+                              {formatDate(
+                                t.transaction_date ||
+                                  t.created_at?.split("T")[0],
+                              )}
+                            </p>
+                          </div>
+                          <p className="ml-3 shrink-0 text-sm font-semibold text-blue-400">
+                            {formatCurrency(t.amount)}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {currentMonthTransactions.length === 0 && (
+                  <div className="rounded-2xl bg-black/20 p-5 text-center">
+                    <p className="text-sm text-viggaMuted">
+                      Nenhum lançamento este mês ainda.
+                    </p>
+                  </div>
+                )}
+              </motion.div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* MODAL GASTOS HOJE */}
       <AnimatePresence>
         {showTodayModal && (
@@ -554,8 +840,9 @@ Seja direto, use linguagem simples e amigável. Não use markdown, asteriscos ou
                       {formatCurrency(totalToday)}
                     </h2>
                     <p className="mt-1 text-xs text-viggaMuted">
-                      {todayTransactions.length} lançamento
-                      {todayTransactions.length !== 1 ? "s" : ""} hoje
+                      {todayDebitTransactions.length} lançamento
+                      {todayDebitTransactions.length !== 1 ? "s" : ""} via Pix
+                      ou Dinheiro
                     </p>
                   </div>
                   <button
@@ -566,15 +853,15 @@ Seja direto, use linguagem simples e amigável. Não use markdown, asteriscos ou
                     <X size={18} />
                   </button>
                 </div>
-                {todayTransactions.length === 0 ? (
+                {todayDebitTransactions.length === 0 ? (
                   <div className="rounded-2xl bg-black/20 p-5 text-center">
                     <p className="text-sm text-viggaMuted">
-                      Nenhum lançamento hoje ainda.
+                      Nenhum lançamento via Pix ou Dinheiro hoje.
                     </p>
                   </div>
                 ) : (
                   <div className="space-y-2">
-                    {todayTransactions.map((t) => (
+                    {todayDebitTransactions.map((t) => (
                       <div
                         key={t.id}
                         className="flex items-center justify-between rounded-2xl bg-black/20 px-4 py-3"
