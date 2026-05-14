@@ -72,11 +72,12 @@ const DEFAULT_FILTERS = {
 const INITIAL_TX_COUNT = 5;
 
 const Launch = () => {
-  const { householdId } = useAuth();
+  const { householdId, userId, userName } = useAuth();
   const [input, setInput] = useState("");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [lastSaved, setLastSaved] = useState(null);
   const [transactions, setTransactions] = useState([]);
+  const [profilesMap, setProfilesMap] = useState({}); // user_id → name
   const [loadingTransactions, setLoadingTransactions] = useState(false);
   const [showAllTransactions, setShowAllTransactions] = useState(false);
 
@@ -127,6 +128,26 @@ const Launch = () => {
     );
   }, [filters]);
 
+  // Busca todos os perfis do household para montar o mapa user_id → name
+  async function fetchProfiles() {
+    if (!householdId) return;
+    try {
+      const { data } = await supabase
+        .from("profiles")
+        .select("id, name")
+        .eq("household_id", householdId);
+      if (data) {
+        const map = {};
+        data.forEach((p) => {
+          map[p.id] = p.name || "Sem nome";
+        });
+        setProfilesMap(map);
+      }
+    } catch (err) {
+      console.error("Erro ao buscar perfis:", err);
+    }
+  }
+
   async function fetchTransactions() {
     try {
       setLoadingTransactions(true);
@@ -156,8 +177,9 @@ const Launch = () => {
   }
 
   useEffect(() => {
+    fetchProfiles();
     fetchTransactions();
-  }, [hasActiveFilters]);
+  }, [hasActiveFilters, householdId]);
 
   useEffect(() => {
     if (!isEditing) return;
@@ -179,6 +201,15 @@ const Launch = () => {
     if (hasActiveFilters || showAllTransactions) return filteredTransactions;
     return filteredTransactions.slice(0, INITIAL_TX_COUNT);
   }, [filteredTransactions, showAllTransactions, hasActiveFilters]);
+
+  // Retorna o primeiro nome do perfil
+  function getAuthorName(transaction) {
+    if (!transaction.user_id) return null;
+    const name = profilesMap[transaction.user_id];
+    if (!name) return null;
+    // Retorna só o primeiro nome
+    return name.split(" ")[0];
+  }
 
   function formatCurrency(value) {
     return Number(value || 0).toLocaleString("pt-BR", {
@@ -243,7 +274,13 @@ const Launch = () => {
     const { detectedDate, ...launchData } = parsed;
     const { data, error } = await supabase
       .from("transactions")
-      .insert([{ ...launchData, household_id: householdId }])
+      .insert([
+        {
+          ...launchData,
+          household_id: householdId,
+          user_id: userId, // ✅ salva quem lançou
+        },
+      ])
       .select();
 
     if (error) {
@@ -512,40 +549,49 @@ const Launch = () => {
               </motion.div>
             ) : (
               <>
-                {visibleTransactions.map((transaction) => (
-                  <motion.button
-                    key={transaction.id}
-                    type="button"
-                    onClick={() => openTransactionDetails(transaction)}
-                    initial={{ opacity: 0, x: -10 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    whileTap={{ scale: 0.98 }}
-                    className={`${ui.card} flex w-full items-center justify-between border-none bg-viggaCard/50 px-5 py-4 text-left`}
-                  >
-                    <div className="min-w-0 pr-4">
-                      <p className="truncate text-sm font-semibold tracking-tight text-viggaText">
-                        {transaction.description}
-                      </p>
-                      <p className="mt-1 text-[11px] font-medium uppercase tracking-wider text-viggaMuted">
-                        {transaction.category || "Geral"} •{" "}
-                        {transaction.payment_method || "Não identificado"} •{" "}
-                        {transaction.transaction_date
-                          ? new Date(
-                              `${transaction.transaction_date}T00:00:00`,
-                            ).toLocaleDateString("pt-BR", {
-                              day: "2-digit",
-                              month: "short",
-                            })
-                          : ""}
-                      </p>
-                    </div>
-                    <div className="shrink-0 text-right">
-                      <p className="text-base font-bold leading-none text-viggaGold">
-                        {formatCurrency(transaction.amount)}
-                      </p>
-                    </div>
-                  </motion.button>
-                ))}
+                {visibleTransactions.map((transaction) => {
+                  const author = getAuthorName(transaction);
+                  return (
+                    <motion.button
+                      key={transaction.id}
+                      type="button"
+                      onClick={() => openTransactionDetails(transaction)}
+                      initial={{ opacity: 0, x: -10 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      whileTap={{ scale: 0.98 }}
+                      className={`${ui.card} flex w-full items-center justify-between border-none bg-viggaCard/50 px-5 py-4 text-left`}
+                    >
+                      <div className="min-w-0 pr-4">
+                        <p className="truncate text-sm font-semibold tracking-tight text-viggaText">
+                          {transaction.description}
+                        </p>
+                        <p className="mt-1 text-[11px] font-medium uppercase tracking-wider text-viggaMuted">
+                          {transaction.category || "Geral"} •{" "}
+                          {transaction.payment_method || "Não identificado"} •{" "}
+                          {transaction.transaction_date
+                            ? new Date(
+                                `${transaction.transaction_date}T00:00:00`,
+                              ).toLocaleDateString("pt-BR", {
+                                day: "2-digit",
+                                month: "short",
+                              })
+                            : ""}
+                          {author && (
+                            <span className="text-viggaGold/70">
+                              {" "}
+                              • {author}
+                            </span>
+                          )}
+                        </p>
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <p className="text-base font-bold leading-none text-viggaGold">
+                          {formatCurrency(transaction.amount)}
+                        </p>
+                      </div>
+                    </motion.button>
+                  );
+                })}
 
                 {!hasActiveFilters &&
                   filteredTransactions.length > INITIAL_TX_COUNT && (
@@ -691,6 +737,15 @@ const Launch = () => {
                         : selectedTransaction.amount,
                     )}
                   </h2>
+                  {/* Autor no modal de detalhes */}
+                  {!isEditing && getAuthorName(selectedTransaction) && (
+                    <p className="mt-1 text-xs text-viggaMuted">
+                      Lançado por{" "}
+                      <span className="font-semibold text-viggaGold">
+                        {getAuthorName(selectedTransaction)}
+                      </span>
+                    </p>
+                  )}
                 </div>
                 <button
                   type="button"
