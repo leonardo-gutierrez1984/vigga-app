@@ -20,6 +20,19 @@ const DEFAULT_FILTERS = {
 
 const INITIAL_COUNT = 5;
 
+// Gera próximas 4 datas semanais/quinzenais a partir de uma data
+function generateNextRecurringDates(fromDate, recurrence) {
+  const intervalDays = recurrence === "weekly" ? 7 : 15;
+  const dates = [];
+  let current = new Date(`${fromDate}T00:00:00`);
+  for (let i = 0; i < 4; i++) {
+    current = new Date(current);
+    current.setDate(current.getDate() + intervalDays);
+    dates.push(current.toISOString().split("T")[0]);
+  }
+  return dates;
+}
+
 function Cards() {
   const { householdId } = useAuth();
   const [transactions, setTransactions] = useState([]);
@@ -41,6 +54,7 @@ function Cards() {
   const [partialAmount, setPartialAmount] = useState("");
   const [isSavingPayment, setIsSavingPayment] = useState(false);
   const [paymentSuccess, setPaymentSuccess] = useState(false);
+  const [billsSettled, setBillsSettled] = useState(0); // quantos vencimentos foram quitados
 
   async function fetchCardData() {
     if (!householdId) return;
@@ -96,7 +110,6 @@ function Cards() {
     }
   }
 
-  // ✅ householdId na dependência — garante que a query roda quando ele estiver disponível
   useEffect(() => {
     fetchCardData();
   }, [householdId]);
@@ -162,6 +175,187 @@ function Cards() {
       : 0;
   const availableLimit = cardLimit - currentInvoice;
 
+  // ── QUITAR VENCIMENTOS DE CRÉDITO DO MÊS ─────────────
+  // Mesma lógica do Bills.jsx — marca como pago e gera próximo mês
+  async function settleCreditBills() {
+    const now = new Date();
+    const today = now.toISOString().split("T")[0];
+
+    // Busca todos os vencimentos de crédito pendentes do mês atual
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1)
+      .toISOString()
+      .split("T")[0];
+    const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0)
+      .toISOString()
+      .split("T")[0];
+
+    const { data: pendingBills } = await supabase
+      .from("bills")
+      .select("*")
+      .eq("household_id", householdId)
+      .eq("payment_method", "Crédito")
+      .eq("status", "pending")
+      .gte("due_date", startOfMonth)
+      .lte("due_date", endOfMonth);
+
+    if (!pendingBills || pendingBills.length === 0) return 0;
+
+    for (const bill of pendingBills) {
+      // Marca como "credit" (pago no crédito)
+      await supabase
+        .from("bills")
+        .update({ status: "credit" })
+        .eq("id", bill.id);
+
+      // Remove transação antecipada se existir
+      await supabase
+        .from("transactions")
+        .delete()
+        .eq("household_id", householdId)
+        .eq("source", "bill_credit")
+        .eq("notes", bill.id);
+
+      // Cria transação real com data de hoje
+      await supabase.from("transactions").insert([
+        {
+          description: bill.name,
+          amount: bill.amount,
+          category: bill.category || "Contas",
+          payment_method: "Crédito",
+          type: "expense",
+          transaction_date: today,
+          source: "bill",
+          household_id: householdId,
+        },
+      ]);
+
+      // Gera próximo vencimento (mesma lógica do Bills.jsx)
+      const recurrence = bill.recurrence;
+
+      if (recurrence === "monthly") {
+        const nextDue = new Date(`${bill.due_date}T00:00:00`);
+        nextDue.setMonth(nextDue.getMonth() + 1);
+        const nextDueStr = nextDue.toISOString().split("T")[0];
+
+        const { data: existing } = await supabase
+          .from("bills")
+          .select("id")
+          .eq("household_id", householdId)
+          .eq("name", bill.name)
+          .eq("due_date", nextDueStr)
+          .single();
+
+        if (!existing) {
+          const { data: newBill } = await supabase
+            .from("bills")
+            .insert([
+              {
+                name: bill.name,
+                amount: bill.amount,
+                due_date: nextDueStr,
+                status: "pending",
+                recurrence: "monthly",
+                payment_method: bill.payment_method,
+                category: bill.category || "Contas",
+                household_id: householdId,
+              },
+            ])
+            .select()
+            .single();
+
+          // Cria transação antecipada para o próximo mês
+          if (newBill && bill.amount > 0) {
+            await supabase.from("transactions").insert([
+              {
+                description: bill.name,
+                amount: bill.amount,
+                category: bill.category || "Contas",
+                payment_method: "Crédito",
+                type: "expense",
+                transaction_date: nextDueStr,
+                source: "bill_credit",
+                household_id: householdId,
+                notes: newBill.id,
+              },
+            ]);
+          }
+        }
+      } else if (recurrence === "weekly" || recurrence === "biweekly") {
+        const { data: remaining } = await supabase
+          .from("bills")
+          .select("id, due_date")
+          .eq("household_id", householdId)
+          .eq("name", bill.name)
+          .eq("recurrence", recurrence)
+          .eq("status", "pending")
+          .neq("id", bill.id);
+
+        const currentDue = new Date(`${bill.due_date}T00:00:00`);
+        const remainingInMonth = (remaining || []).filter((b) => {
+          const d = new Date(`${b.due_date}T00:00:00`);
+          return (
+            d.getMonth() === currentDue.getMonth() &&
+            d.getFullYear() === currentDue.getFullYear()
+          );
+        });
+
+        if (remainingInMonth.length === 0) {
+          const nextDates = generateNextRecurringDates(
+            bill.due_date,
+            recurrence,
+          );
+          for (const date of nextDates) {
+            const { data: existingNext } = await supabase
+              .from("bills")
+              .select("id")
+              .eq("household_id", householdId)
+              .eq("name", bill.name)
+              .eq("due_date", date)
+              .single();
+
+            if (!existingNext) {
+              const { data: newBill } = await supabase
+                .from("bills")
+                .insert([
+                  {
+                    name: bill.name,
+                    amount: bill.amount,
+                    due_date: date,
+                    status: "pending",
+                    recurrence,
+                    payment_method: bill.payment_method,
+                    category: bill.category || "Contas",
+                    household_id: householdId,
+                  },
+                ])
+                .select()
+                .single();
+
+              if (newBill && bill.amount > 0) {
+                await supabase.from("transactions").insert([
+                  {
+                    description: bill.name,
+                    amount: bill.amount,
+                    category: bill.category || "Contas",
+                    payment_method: "Crédito",
+                    type: "expense",
+                    transaction_date: date,
+                    source: "bill_credit",
+                    household_id: householdId,
+                    notes: newBill.id,
+                  },
+                ]);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return pendingBills.length;
+  }
+  // ─────────────────────────────────────────────────────
+
   async function handlePayInvoice() {
     if (!cardData) return;
 
@@ -179,6 +373,7 @@ function Cards() {
       const referenceMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
       const today = now.toISOString().split("T")[0];
 
+      // 1. Registra o pagamento da fatura
       const { error } = await supabase.from("card_payments").insert([
         {
           household_id: householdId,
@@ -194,6 +389,13 @@ function Cards() {
         return;
       }
 
+      // 2. Se pagamento total → quita todos os vencimentos de crédito do mês
+      let settled = 0;
+      if (paymentType === "total") {
+        settled = await settleCreditBills();
+      }
+
+      setBillsSettled(settled);
       setPaymentSuccess(true);
       setPartialAmount("");
       setPaymentType("total");
@@ -202,7 +404,8 @@ function Cards() {
       setTimeout(() => {
         setPaymentSuccess(false);
         setShowPayInvoiceModal(false);
-      }, 2000);
+        setBillsSettled(0);
+      }, 3000);
     } catch (err) {
       console.error("Erro inesperado:", err);
     } finally {
@@ -462,6 +665,7 @@ function Cards() {
               className="w-full max-w-[430px] rounded-[2rem] border border-viggaGold/10 bg-viggaCard p-5 shadow-2xl"
             >
               {paymentSuccess ? (
+                /* Tela de sucesso */
                 <motion.div
                   initial={{ opacity: 0, scale: 0.9 }}
                   animate={{ opacity: 1, scale: 1 }}
@@ -472,11 +676,19 @@ function Cards() {
                     className="mx-auto mb-3 text-viggaGreen"
                   />
                   <h2 className="text-xl font-semibold text-viggaText">
-                    Pagamento registrado!
+                    Fatura paga!
                   </h2>
                   <p className="mt-2 text-sm text-viggaMuted">
                     Seu limite foi atualizado.
                   </p>
+                  {billsSettled > 0 && (
+                    <p className="mt-1 text-xs text-viggaGreen">
+                      {billsSettled} vencimento{billsSettled > 1 ? "s" : ""} de
+                      crédito{" "}
+                      {billsSettled > 1 ? "foram quitados" : "foi quitado"} e o
+                      próximo mês já foi gerado.
+                    </p>
+                  )}
                 </motion.div>
               ) : (
                 <>
@@ -528,6 +740,26 @@ function Cards() {
                     ))}
                   </div>
 
+                  {/* Aviso sobre quitação automática — só no pagamento total */}
+                  <AnimatePresence>
+                    {paymentType === "total" && (
+                      <motion.div
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: "auto" }}
+                        exit={{ opacity: 0, height: 0 }}
+                        className="mb-4 overflow-hidden"
+                      >
+                        <div className="rounded-2xl border border-viggaGreen/20 bg-viggaGreen/10 px-4 py-3">
+                          <p className="text-xs text-viggaGreen">
+                            ✓ Os vencimentos de crédito pendentes deste mês
+                            serão quitados automaticamente e o próximo mês será
+                            gerado.
+                          </p>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
                   <AnimatePresence>
                     {paymentType === "partial" && (
                       <motion.div
@@ -547,6 +779,10 @@ function Cards() {
                           placeholder="Ex: 500,00"
                           className="w-full rounded-2xl border border-viggaGold/10 bg-black/20 px-4 py-3 text-viggaText outline-none placeholder:text-viggaMuted"
                         />
+                        <p className="mt-2 text-xs text-viggaMuted">
+                          No pagamento parcial os vencimentos não são quitados
+                          automaticamente.
+                        </p>
                       </motion.div>
                     )}
                   </AnimatePresence>
@@ -573,7 +809,7 @@ function Cards() {
                       ) : (
                         <CheckCircle2 size={16} />
                       )}
-                      {isSavingPayment ? "Salvando..." : "Confirmar"}
+                      {isSavingPayment ? "Processando..." : "Confirmar"}
                     </button>
                   </div>
                 </>

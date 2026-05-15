@@ -1,7 +1,14 @@
-import React, { useEffect, useState, useMemo } from "react";
+import React, {
+  useEffect,
+  useState,
+  useMemo,
+  useRef,
+  useCallback,
+} from "react";
 import { supabase } from "../lib/supabase";
 import {
   Mic,
+  MicOff,
   Send,
   CheckCircle2,
   Loader2,
@@ -12,6 +19,7 @@ import {
   Save,
   RefreshCw,
   Plus,
+  Camera,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ui } from "../styles/ui";
@@ -72,12 +80,12 @@ const DEFAULT_FILTERS = {
 const INITIAL_TX_COUNT = 5;
 
 const Launch = () => {
-  const { householdId, userId, userName } = useAuth();
+  const { householdId, userId } = useAuth();
   const [input, setInput] = useState("");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [lastSaved, setLastSaved] = useState(null);
   const [transactions, setTransactions] = useState([]);
-  const [profilesMap, setProfilesMap] = useState({}); // user_id → name
+  const [profilesMap, setProfilesMap] = useState({});
   const [loadingTransactions, setLoadingTransactions] = useState(false);
   const [showAllTransactions, setShowAllTransactions] = useState(false);
 
@@ -98,11 +106,204 @@ const Launch = () => {
   const [isSavingRecurrence, setIsSavingRecurrence] = useState(false);
 
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
-
   const [customCategories, setCustomCategories] =
     useState(loadCustomCategories);
   const [editCustomCategory, setEditCustomCategory] = useState("");
   const [editIsCustom, setEditIsCustom] = useState(false);
+
+  // ── RECONHECIMENTO DE VOZ ─────────────────────────────
+  const [isListening, setIsListening] = useState(false);
+  const [voiceError, setVoiceError] = useState(null);
+  const recognitionRef = useRef(null);
+
+  const speechSupported =
+    typeof window !== "undefined" &&
+    ("SpeechRecognition" in window || "webkitSpeechRecognition" in window);
+
+  const initRecognition = useCallback(() => {
+    if (!speechSupported) return null;
+    const SpeechRecognition =
+      window.SpeechRecognition || window.webkitSpeechRecognition;
+    const recognition = new SpeechRecognition();
+    recognition.lang = "pt-BR";
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.maxAlternatives = 1;
+    recognition.onstart = () => {
+      setIsListening(true);
+      setVoiceError(null);
+    };
+    recognition.onresult = (event) => {
+      let transcript = "";
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        transcript += event.results[i][0].transcript;
+      }
+      setInput(transcript);
+    };
+    recognition.onerror = (event) => {
+      setIsListening(false);
+      if (event.error === "not-allowed")
+        setVoiceError(
+          "Permissão de microfone negada. Verifique as configurações do browser.",
+        );
+      else if (event.error === "no-speech")
+        setVoiceError("Nenhuma fala detectada. Tente novamente.");
+      else if (event.error === "network")
+        setVoiceError(
+          "O reconhecimento de voz requer HTTPS. Teste pelo link da Vercel.",
+        );
+      else setVoiceError("Erro ao reconhecer voz. Tente novamente.");
+      setTimeout(() => setVoiceError(null), 5000);
+    };
+    recognition.onend = () => {
+      setIsListening(false);
+    };
+    return recognition;
+  }, [speechSupported]);
+
+  function handleVoiceToggle() {
+    if (!speechSupported) {
+      setVoiceError(
+        "Seu browser não suporta reconhecimento de voz. Use Chrome ou Safari.",
+      );
+      setTimeout(() => setVoiceError(null), 4000);
+      return;
+    }
+    if (isListening) {
+      recognitionRef.current?.stop();
+      setIsListening(false);
+      return;
+    }
+    const recognition = initRecognition();
+    if (!recognition) return;
+    recognitionRef.current = recognition;
+    try {
+      recognition.start();
+    } catch (err) {
+      console.error("Erro ao iniciar reconhecimento:", err);
+      setVoiceError("Não foi possível iniciar o microfone.");
+      setTimeout(() => setVoiceError(null), 4000);
+    }
+  }
+
+  useEffect(() => {
+    return () => {
+      recognitionRef.current?.stop();
+    };
+  }, []);
+  // ─────────────────────────────────────────────────────
+
+  // ── LEITOR DE NOTA FISCAL (Claude Haiku Vision) ───────
+  const [isReadingReceipt, setIsReadingReceipt] = useState(false);
+  const [receiptError, setReceiptError] = useState(null);
+  const cameraInputRef = useRef(null);
+
+  function handleCameraClick() {
+    cameraInputRef.current?.click();
+  }
+
+  async function handleReceiptImage(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Reseta o input para permitir selecionar a mesma foto novamente
+    e.target.value = "";
+
+    setIsReadingReceipt(true);
+    setReceiptError(null);
+
+    try {
+      // Converte a imagem para base64
+      const base64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result.split(",")[1]);
+        reader.onerror = () => reject(new Error("Falha ao ler imagem"));
+        reader.readAsDataURL(file);
+      });
+
+      const mediaType = file.type || "image/jpeg";
+
+      const response = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": import.meta.env.VITE_ANTHROPIC_API_KEY,
+          "anthropic-version": "2023-06-01",
+          "anthropic-dangerous-direct-browser-access": "true",
+        },
+        body: JSON.stringify({
+          model: "claude-haiku-4-5-20251001", // ✅ Haiku — mais barato para imagens
+          max_tokens: 200,
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "image",
+                  source: {
+                    type: "base64",
+                    media_type: mediaType,
+                    data: base64,
+                  },
+                },
+                {
+                  type: "text",
+                  text: `Você é um assistente de controle financeiro. Analise esta nota fiscal ou cupom e extraia as informações.
+
+Responda APENAS com uma linha de texto no formato:
+[nome do estabelecimento] [valor total] [forma de pagamento se visível]
+
+Exemplos de resposta:
+Condor 87,50 pix
+Panvel 34,90
+Uber 22,00 crédito
+McDonald's 45,80 dinheiro
+
+Regras:
+- Use o nome do estabelecimento como aparece na nota (ex: Condor, Panvel, Posto Ipiranga)
+- Valor deve ser o TOTAL da nota (último valor, não subtotal)
+- Forma de pagamento só se aparecer claramente (pix, crédito, dinheiro, débito)
+- Se não conseguir ler o valor, escreva apenas o nome do estabelecimento
+- Responda SOMENTE a linha, sem explicações`,
+                },
+              ],
+            },
+          ],
+        }),
+      });
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        if (response.status === 401)
+          throw new Error("API key inválida. Verifique a configuração.");
+        if (response.status === 429)
+          throw new Error(
+            "Créditos da API esgotados. Acesse console.anthropic.com para recarregar.",
+          );
+        throw new Error(`Erro na API: ${response.status}`);
+      }
+
+      const data = await response.json();
+      const text = data.content?.[0]?.text?.trim();
+
+      if (text) {
+        setInput(text);
+      } else {
+        setReceiptError(
+          "Não foi possível ler a nota. Tente uma foto mais nítida.",
+        );
+      }
+    } catch (err) {
+      console.error("Erro ao ler nota:", err);
+      setReceiptError(
+        err.message || "Erro ao processar a imagem. Tente novamente.",
+      );
+    } finally {
+      setIsReadingReceipt(false);
+      setTimeout(() => setReceiptError(null), 6000);
+    }
+  }
+  // ─────────────────────────────────────────────────────
 
   const allCategories = useMemo(() => {
     const base = BASE_CATEGORIES.filter((c) => c !== "Outros");
@@ -128,7 +329,6 @@ const Launch = () => {
     );
   }, [filters]);
 
-  // Busca todos os perfis do household para montar o mapa user_id → name
   async function fetchProfiles() {
     if (!householdId) return;
     try {
@@ -156,13 +356,11 @@ const Launch = () => {
         .select("*")
         .eq("household_id", householdId)
         .order("created_at", { ascending: false });
-
       if (hasActiveFilters) {
         query.limit(200);
       } else {
         query.limit(50);
       }
-
       const { data, error } = await query;
       if (error) {
         console.error("Erro ao buscar lançamentos:", error);
@@ -202,12 +400,10 @@ const Launch = () => {
     return filteredTransactions.slice(0, INITIAL_TX_COUNT);
   }, [filteredTransactions, showAllTransactions, hasActiveFilters]);
 
-  // Retorna o primeiro nome do perfil
   function getAuthorName(transaction) {
     if (!transaction.user_id) return null;
     const name = profilesMap[transaction.user_id];
     if (!name) return null;
-    // Retorna só o primeiro nome
     return name.split(" ")[0];
   }
 
@@ -248,6 +444,10 @@ const Launch = () => {
 
   async function handleRegister() {
     if (!input.trim() || isAnalyzing) return;
+    if (isListening) {
+      recognitionRef.current?.stop();
+      setIsListening(false);
+    }
     try {
       setIsAnalyzing(true);
       const parsed = parseLaunchText(input);
@@ -274,20 +474,12 @@ const Launch = () => {
     const { detectedDate, ...launchData } = parsed;
     const { data, error } = await supabase
       .from("transactions")
-      .insert([
-        {
-          ...launchData,
-          household_id: householdId,
-          user_id: userId, // ✅ salva quem lançou
-        },
-      ])
+      .insert([{ ...launchData, household_id: householdId, user_id: userId }])
       .select();
-
     if (error) {
       console.error("Erro ao salvar lançamento:", error);
       return;
     }
-
     setLastSaved(data?.[0] || launchData);
     setInput("");
     setShowAllTransactions(false);
@@ -311,11 +503,7 @@ const Launch = () => {
     if (!pendingLaunch) return;
     try {
       setIsSavingRecurrence(true);
-      const launchWithPayment = {
-        ...pendingLaunch,
-        payment_method: recurrencePayment,
-      };
-      await saveLaunch(launchWithPayment);
+      await saveLaunch({ ...pendingLaunch, payment_method: recurrencePayment });
       const { error: billError } = await supabase.from("bills").insert([
         {
           name: pendingLaunch.description,
@@ -357,7 +545,6 @@ const Launch = () => {
         editAmount.replace(",", ".").replace(/[^\d.]/g, ""),
       );
       const finalCategory = resolveEditCategory();
-
       const { data, error } = await supabase
         .from("transactions")
         .update({
@@ -369,13 +556,11 @@ const Launch = () => {
         })
         .eq("id", selectedTransaction.id)
         .select();
-
       if (error) {
         console.error("Erro ao editar lançamento:", error);
         return;
       }
-      const updatedTransaction = data?.[0];
-      if (updatedTransaction) setSelectedTransaction(updatedTransaction);
+      if (data?.[0]) setSelectedTransaction(data[0]);
       setIsEditing(false);
       await fetchTransactions();
     } catch (err) {
@@ -417,11 +602,18 @@ const Launch = () => {
         <div className={`${ui.card} border-viggaGold/10 p-5`}>
           <textarea
             className="w-full resize-none border-none bg-transparent p-0 text-lg text-viggaText placeholder:text-viggaMuted focus:ring-0"
-            placeholder="Ex: Panvel 45 pix... ou Uber 22 crédito"
+            placeholder={
+              isListening
+                ? "Ouvindo... fale agora"
+                : isReadingReceipt
+                  ? "Lendo a nota..."
+                  : "Ex: Panvel 45 pix... ou Uber 22 crédito"
+            }
             rows="3"
             value={input}
             onChange={(e) => setInput(e.target.value)}
           />
+
           <div className="mt-4 flex flex-wrap gap-2">
             {[
               "Mercado",
@@ -446,15 +638,111 @@ const Launch = () => {
               </button>
             ))}
           </div>
+
+          {/* Erros de voz e câmera */}
+          <AnimatePresence>
+            {(voiceError || receiptError) && (
+              <motion.p
+                initial={{ opacity: 0, y: -4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0 }}
+                className="mt-3 text-xs text-red-400"
+              >
+                {voiceError || receiptError}
+              </motion.p>
+            )}
+          </AnimatePresence>
+
+          {/* Status de leitura da nota */}
+          <AnimatePresence>
+            {isReadingReceipt && (
+              <motion.div
+                initial={{ opacity: 0, y: -4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0 }}
+                className="mt-3 flex items-center gap-2 text-xs text-viggaGold"
+              >
+                <Loader2 size={12} className="animate-spin" />
+                Lendo a nota com IA...
+              </motion.div>
+            )}
+          </AnimatePresence>
+
           <div className="mt-4 flex items-center justify-between border-t border-viggaGold/5 pt-4">
-            <motion.button
-              whileTap={{ scale: 0.9 }}
-              type="button"
-              className="relative rounded-full bg-viggaBrown p-3 text-viggaGold"
-            >
-              <span className="absolute inset-0 rounded-full bg-viggaGold/10 animate-ping" />
-              <Mic size={20} className="relative z-10" />
-            </motion.button>
+            {/* BOTÕES ESQUERDA: MICROFONE + CÂMERA */}
+            <div className="flex items-center gap-2">
+              {/* BOTÃO MICROFONE */}
+              <motion.button
+                whileTap={{ scale: 0.9 }}
+                type="button"
+                onClick={handleVoiceToggle}
+                className={`relative rounded-full p-3 transition-colors ${
+                  isListening
+                    ? "bg-red-500/20 text-red-400"
+                    : "bg-viggaBrown text-viggaGold"
+                }`}
+              >
+                {isListening && (
+                  <>
+                    <span className="absolute inset-0 rounded-full bg-red-400/30 animate-ping" />
+                    <span className="absolute inset-0 rounded-full bg-red-400/10 animate-pulse" />
+                  </>
+                )}
+                {!isListening && (
+                  <span className="absolute inset-0 rounded-full bg-viggaGold/10 animate-ping" />
+                )}
+                {isListening ? (
+                  <MicOff size={20} className="relative z-10" />
+                ) : (
+                  <Mic size={20} className="relative z-10" />
+                )}
+              </motion.button>
+
+              {/* BOTÃO CÂMERA / NOTA FISCAL */}
+              <motion.button
+                whileTap={{ scale: 0.9 }}
+                type="button"
+                onClick={handleCameraClick}
+                disabled={isReadingReceipt}
+                className={`relative rounded-full p-3 transition-colors ${
+                  isReadingReceipt
+                    ? "bg-viggaGold/20 text-viggaGold"
+                    : "bg-viggaBrown text-viggaGold"
+                } disabled:opacity-60`}
+              >
+                {isReadingReceipt ? (
+                  <Loader2 size={20} className="animate-spin" />
+                ) : (
+                  <Camera size={20} />
+                )}
+              </motion.button>
+
+              {/* Input de arquivo oculto — aceita câmera e galeria */}
+              <input
+                ref={cameraInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                className="hidden"
+                onChange={handleReceiptImage}
+              />
+            </div>
+
+            {/* Status ouvindo */}
+            <AnimatePresence>
+              {isListening && (
+                <motion.span
+                  initial={{ opacity: 0, x: -8 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0 }}
+                  className="text-xs text-red-400 font-medium"
+                >
+                  Ouvindo...
+                </motion.span>
+              )}
+            </AnimatePresence>
+
+            {/* BOTÃO REGISTRAR */}
             <button
               type="button"
               onClick={handleRegister}
@@ -473,6 +761,7 @@ const Launch = () => {
           </div>
         </div>
 
+        {/* Feedback de sucesso */}
         <AnimatePresence>
           {lastSaved && (
             <motion.div
@@ -490,6 +779,7 @@ const Launch = () => {
           )}
         </AnimatePresence>
 
+        {/* HISTÓRICO */}
         <div className="mt-8">
           <div className="mb-4 flex items-center justify-between px-1">
             <div className="flex items-center gap-2 text-viggaMuted">
@@ -650,7 +940,6 @@ const Launch = () => {
                   <X size={18} />
                 </button>
               </div>
-
               <div className="mb-5">
                 <p className="mb-2 text-xs uppercase tracking-[0.18em] text-viggaMuted">
                   Forma de pagamento
@@ -661,18 +950,13 @@ const Launch = () => {
                       key={method}
                       type="button"
                       onClick={() => setRecurrencePayment(method)}
-                      className={`rounded-full px-4 py-2 text-sm font-medium transition-colors ${
-                        recurrencePayment === method
-                          ? "bg-viggaGold text-black"
-                          : "border border-viggaGold/10 bg-black/20 text-viggaMuted"
-                      }`}
+                      className={`rounded-full px-4 py-2 text-sm font-medium transition-colors ${recurrencePayment === method ? "bg-viggaGold text-black" : "border border-viggaGold/10 bg-black/20 text-viggaMuted"}`}
                     >
                       {method}
                     </button>
                   ))}
                 </div>
               </div>
-
               <p className="mb-3 text-sm text-viggaMuted">
                 Este lançamento se repete todo mês?
               </p>
@@ -737,7 +1021,6 @@ const Launch = () => {
                         : selectedTransaction.amount,
                     )}
                   </h2>
-                  {/* Autor no modal de detalhes */}
                   {!isEditing && getAuthorName(selectedTransaction) && (
                     <p className="mt-1 text-xs text-viggaMuted">
                       Lançado por{" "}
@@ -900,7 +1183,6 @@ const Launch = () => {
                       </p>
                     )}
                   </div>
-
                   <div className="rounded-2xl bg-black/20 p-4">
                     <p className="text-xs uppercase tracking-[0.18em] text-viggaMuted">
                       Data
