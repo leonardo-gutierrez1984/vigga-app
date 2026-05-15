@@ -20,6 +20,7 @@ import {
   RefreshCw,
   Plus,
   Camera,
+  CalendarClock,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ui } from "../styles/ui";
@@ -111,6 +112,14 @@ const Launch = () => {
   const [editCustomCategory, setEditCustomCategory] = useState("");
   const [editIsCustom, setEditIsCustom] = useState(false);
 
+  // ── TORNAR RECORRENTE ─────────────────────────────────
+  const [showMakeRecurrentModal, setShowMakeRecurrentModal] = useState(false);
+  const [recurrentDayOfMonth, setRecurrentDayOfMonth] = useState("");
+  const [recurrentPaymentMethod, setRecurrentPaymentMethod] = useState("Pix");
+  const [isSavingRecurrent, setIsSavingRecurrent] = useState(false);
+  const [recurrentSuccess, setRecurrentSuccess] = useState(false);
+  // ─────────────────────────────────────────────────────
+
   // ── RECONHECIMENTO DE VOZ ─────────────────────────────
   const [isListening, setIsListening] = useState(false);
   const [voiceError, setVoiceError] = useState(null);
@@ -193,7 +202,7 @@ const Launch = () => {
   }, []);
   // ─────────────────────────────────────────────────────
 
-  // ── LEITOR DE NOTA FISCAL (Claude Haiku Vision) ───────
+  // ── LEITOR DE NOTA FISCAL ─────────────────────────────
   const [isReadingReceipt, setIsReadingReceipt] = useState(false);
   const [receiptError, setReceiptError] = useState(null);
   const cameraInputRef = useRef(null);
@@ -205,24 +214,17 @@ const Launch = () => {
   async function handleReceiptImage(e) {
     const file = e.target.files?.[0];
     if (!file) return;
-
-    // Reseta o input para permitir selecionar a mesma foto novamente
     e.target.value = "";
-
     setIsReadingReceipt(true);
     setReceiptError(null);
-
     try {
-      // Converte a imagem para base64
       const base64 = await new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve(reader.result.split(",")[1]);
         reader.onerror = () => reject(new Error("Falha ao ler imagem"));
         reader.readAsDataURL(file);
       });
-
       const mediaType = file.type || "image/jpeg";
-
       const response = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: {
@@ -232,7 +234,7 @@ const Launch = () => {
           "anthropic-dangerous-direct-browser-access": "true",
         },
         body: JSON.stringify({
-          model: "claude-haiku-4-5-20251001", // ✅ Haiku — mais barato para imagens
+          model: "claude-haiku-4-5-20251001",
           max_tokens: 200,
           messages: [
             {
@@ -248,32 +250,14 @@ const Launch = () => {
                 },
                 {
                   type: "text",
-                  text: `Você é um assistente de controle financeiro. Analise esta nota fiscal ou cupom e extraia as informações.
-
-Responda APENAS com uma linha de texto no formato:
-[nome do estabelecimento] [valor total] [forma de pagamento se visível]
-
-Exemplos de resposta:
-Condor 87,50 pix
-Panvel 34,90
-Uber 22,00 crédito
-McDonald's 45,80 dinheiro
-
-Regras:
-- Use o nome do estabelecimento como aparece na nota (ex: Condor, Panvel, Posto Ipiranga)
-- Valor deve ser o TOTAL da nota (último valor, não subtotal)
-- Forma de pagamento só se aparecer claramente (pix, crédito, dinheiro, débito)
-- Se não conseguir ler o valor, escreva apenas o nome do estabelecimento
-- Responda SOMENTE a linha, sem explicações`,
+                  text: `Você é um assistente de controle financeiro. Analise esta nota fiscal ou cupom e extraia as informações.\n\nResponda APENAS com uma linha de texto no formato:\n[nome do estabelecimento] [valor total] [forma de pagamento se visível]\n\nExemplos de resposta:\nCondor 87,50 pix\nPanvel 34,90\nUber 22,00 crédito\nMcDonald's 45,80 dinheiro\n\nRegras:\n- Use o nome do estabelecimento como aparece na nota\n- Valor deve ser o TOTAL da nota (último valor, não subtotal)\n- Forma de pagamento só se aparecer claramente\n- Se não conseguir ler o valor, escreva apenas o nome do estabelecimento\n- Responda SOMENTE a linha, sem explicações`,
                 },
               ],
             },
           ],
         }),
       });
-
       if (!response.ok) {
-        const err = await response.json().catch(() => ({}));
         if (response.status === 401)
           throw new Error("API key inválida. Verifique a configuração.");
         if (response.status === 429)
@@ -282,10 +266,8 @@ Regras:
           );
         throw new Error(`Erro na API: ${response.status}`);
       }
-
       const data = await response.json();
       const text = data.content?.[0]?.text?.trim();
-
       if (text) {
         setInput(text);
       } else {
@@ -441,6 +423,129 @@ Regras:
     setEditIsCustom(false);
     setEditCustomCategory("");
   }
+
+  // ── TORNAR RECORRENTE ─────────────────────────────────
+  function openMakeRecurrent(transaction) {
+    // Pré-preenche o dia com o dia do lançamento
+    const day = transaction.transaction_date
+      ? new Date(`${transaction.transaction_date}T00:00:00`).getDate()
+      : new Date().getDate();
+    setRecurrentDayOfMonth(String(day));
+    setRecurrentPaymentMethod(transaction.payment_method || "Pix");
+    setRecurrentSuccess(false);
+    setShowMakeRecurrentModal(true);
+  }
+
+  async function handleMakeRecurrent() {
+    if (!selectedTransaction || !recurrentDayOfMonth) return;
+    try {
+      setIsSavingRecurrent(true);
+
+      const day = parseInt(recurrentDayOfMonth);
+      if (isNaN(day) || day < 1 || day > 31) return;
+
+      // Monta a data de vencimento do próximo mês
+      const now = new Date();
+      let nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, day);
+      // Garante que a data é válida (ex: dia 31 em fevereiro)
+      if (nextMonth.getMonth() !== (now.getMonth() + 1) % 12) {
+        nextMonth = new Date(now.getFullYear(), now.getMonth() + 2, 0); // último dia do próximo mês
+      }
+      const nextDueStr = nextMonth.toISOString().split("T")[0];
+
+      // Cria o vencimento do mês atual como "paid" (já foi pago — é o lançamento que existe)
+      const currentDueStr =
+        selectedTransaction.transaction_date ||
+        new Date().toISOString().split("T")[0];
+
+      // Verifica se já existe um vencimento com esse nome
+      const { data: existing } = await supabase
+        .from("bills")
+        .select("id")
+        .eq("household_id", householdId)
+        .eq("name", selectedTransaction.description)
+        .eq("due_date", currentDueStr)
+        .single();
+
+      if (!existing) {
+        // Cria o vencimento atual como pago
+        await supabase.from("bills").insert([
+          {
+            name: selectedTransaction.description,
+            amount: selectedTransaction.amount,
+            due_date: currentDueStr,
+            status: "paid",
+            recurrence: "monthly",
+            payment_method: recurrentPaymentMethod,
+            category: selectedTransaction.category || "Geral",
+            household_id: householdId,
+          },
+        ]);
+      }
+
+      // Verifica se já existe vencimento para o próximo mês
+      const { data: existingNext } = await supabase
+        .from("bills")
+        .select("id")
+        .eq("household_id", householdId)
+        .eq("name", selectedTransaction.description)
+        .eq("due_date", nextDueStr)
+        .single();
+
+      if (!existingNext) {
+        // Cria o próximo vencimento como pendente
+        const { data: newBill } = await supabase
+          .from("bills")
+          .insert([
+            {
+              name: selectedTransaction.description,
+              amount: selectedTransaction.amount,
+              due_date: nextDueStr,
+              status: "pending",
+              recurrence: "monthly",
+              payment_method: recurrentPaymentMethod,
+              category: selectedTransaction.category || "Geral",
+              household_id: householdId,
+            },
+          ])
+          .select()
+          .single();
+
+        // Se for crédito, cria transação antecipada para o próximo mês
+        if (
+          recurrentPaymentMethod === "Crédito" &&
+          newBill &&
+          selectedTransaction.amount > 0
+        ) {
+          await supabase.from("transactions").insert([
+            {
+              description: selectedTransaction.description,
+              amount: selectedTransaction.amount,
+              category: selectedTransaction.category || "Geral",
+              payment_method: "Crédito",
+              type: "expense",
+              transaction_date: nextDueStr,
+              source: "bill_credit",
+              household_id: householdId,
+              notes: newBill.id,
+            },
+          ]);
+        }
+      }
+
+      setRecurrentSuccess(true);
+      setTimeout(() => {
+        setShowMakeRecurrentModal(false);
+        setRecurrentSuccess(false);
+        closeTransactionDetails();
+      }, 2000);
+    } catch (err) {
+      console.error("Erro ao tornar recorrente:", err);
+    } finally {
+      setIsSavingRecurrent(false);
+    }
+  }
+  // ─────────────────────────────────────────────────────
 
   async function handleRegister() {
     if (!input.trim() || isAnalyzing) return;
@@ -639,7 +744,6 @@ Regras:
             ))}
           </div>
 
-          {/* Erros de voz e câmera */}
           <AnimatePresence>
             {(voiceError || receiptError) && (
               <motion.p
@@ -653,7 +757,6 @@ Regras:
             )}
           </AnimatePresence>
 
-          {/* Status de leitura da nota */}
           <AnimatePresence>
             {isReadingReceipt && (
               <motion.div
@@ -669,18 +772,12 @@ Regras:
           </AnimatePresence>
 
           <div className="mt-4 flex items-center justify-between border-t border-viggaGold/5 pt-4">
-            {/* BOTÕES ESQUERDA: MICROFONE + CÂMERA */}
             <div className="flex items-center gap-2">
-              {/* BOTÃO MICROFONE */}
               <motion.button
                 whileTap={{ scale: 0.9 }}
                 type="button"
                 onClick={handleVoiceToggle}
-                className={`relative rounded-full p-3 transition-colors ${
-                  isListening
-                    ? "bg-red-500/20 text-red-400"
-                    : "bg-viggaBrown text-viggaGold"
-                }`}
+                className={`relative rounded-full p-3 transition-colors ${isListening ? "bg-red-500/20 text-red-400" : "bg-viggaBrown text-viggaGold"}`}
               >
                 {isListening && (
                   <>
@@ -698,17 +795,12 @@ Regras:
                 )}
               </motion.button>
 
-              {/* BOTÃO CÂMERA / NOTA FISCAL */}
               <motion.button
                 whileTap={{ scale: 0.9 }}
                 type="button"
                 onClick={handleCameraClick}
                 disabled={isReadingReceipt}
-                className={`relative rounded-full p-3 transition-colors ${
-                  isReadingReceipt
-                    ? "bg-viggaGold/20 text-viggaGold"
-                    : "bg-viggaBrown text-viggaGold"
-                } disabled:opacity-60`}
+                className={`relative rounded-full p-3 transition-colors ${isReadingReceipt ? "bg-viggaGold/20 text-viggaGold" : "bg-viggaBrown text-viggaGold"} disabled:opacity-60`}
               >
                 {isReadingReceipt ? (
                   <Loader2 size={20} className="animate-spin" />
@@ -717,7 +809,6 @@ Regras:
                 )}
               </motion.button>
 
-              {/* Input de arquivo oculto — aceita câmera e galeria */}
               <input
                 ref={cameraInputRef}
                 type="file"
@@ -728,7 +819,6 @@ Regras:
               />
             </div>
 
-            {/* Status ouvindo */}
             <AnimatePresence>
               {isListening && (
                 <motion.span
@@ -742,7 +832,6 @@ Regras:
               )}
             </AnimatePresence>
 
-            {/* BOTÃO REGISTRAR */}
             <button
               type="button"
               onClick={handleRegister}
@@ -761,7 +850,6 @@ Regras:
           </div>
         </div>
 
-        {/* Feedback de sucesso */}
         <AnimatePresence>
           {lastSaved && (
             <motion.div
@@ -779,7 +867,6 @@ Regras:
           )}
         </AnimatePresence>
 
-        {/* HISTÓRICO */}
         <div className="mt-8">
           <div className="mb-4 flex items-center justify-between px-1">
             <div className="flex items-center gap-2 text-viggaMuted">
@@ -882,7 +969,6 @@ Regras:
                     </motion.button>
                   );
                 })}
-
                 {!hasActiveFilters &&
                   filteredTransactions.length > INITIAL_TX_COUNT && (
                     <motion.button
@@ -902,7 +988,7 @@ Regras:
         </div>
       </div>
 
-      {/* MODAL DE RECORRÊNCIA */}
+      {/* MODAL DE RECORRÊNCIA (data detectada) */}
       <AnimatePresence>
         {showRecurrenceModal && pendingLaunch && (
           <motion.div
@@ -1203,9 +1289,9 @@ Regras:
                 </div>
               </div>
 
-              <div className="mt-5 grid grid-cols-2 gap-3">
+              <div className="mt-5 space-y-3">
                 {isEditing ? (
-                  <>
+                  <div className="grid grid-cols-2 gap-3">
                     <button
                       type="button"
                       onClick={() => setIsEditing(false)}
@@ -1230,33 +1316,174 @@ Regras:
                         </>
                       )}
                     </button>
-                  </>
+                  </div>
                 ) : (
                   <>
-                    <button
-                      type="button"
-                      onClick={() => setIsEditing(true)}
-                      className="flex items-center justify-center gap-2 rounded-2xl border border-viggaGold/10 bg-viggaBrown px-4 py-3 text-sm font-medium text-viggaGold"
-                    >
-                      <Pencil size={16} />
-                      Editar
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleDeleteTransaction}
-                      disabled={isDeletingTransaction}
-                      className="flex items-center justify-center gap-2 rounded-2xl border border-red-400/10 bg-red-500/10 px-4 py-3 text-sm font-medium text-red-300 disabled:opacity-60"
-                    >
-                      {isDeletingTransaction ? (
-                        <Loader2 size={16} className="animate-spin" />
-                      ) : (
-                        <Trash2 size={16} />
-                      )}
-                      {isDeletingTransaction ? "Excluindo..." : "Excluir"}
-                    </button>
+                    {/* BOTÃO TORNAR RECORRENTE — só aparece em modo visualização */}
+                    {selectedTransaction.source !== "bill_credit" && (
+                      <button
+                        type="button"
+                        onClick={() => openMakeRecurrent(selectedTransaction)}
+                        className="flex w-full items-center justify-center gap-2 rounded-2xl border border-viggaGold/20 bg-viggaGold/10 px-4 py-3 text-sm font-medium text-viggaGold"
+                      >
+                        <CalendarClock size={16} />
+                        Tornar recorrente
+                      </button>
+                    )}
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setIsEditing(true)}
+                        className="flex items-center justify-center gap-2 rounded-2xl border border-viggaGold/10 bg-viggaBrown px-4 py-3 text-sm font-medium text-viggaGold"
+                      >
+                        <Pencil size={16} />
+                        Editar
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleDeleteTransaction}
+                        disabled={isDeletingTransaction}
+                        className="flex items-center justify-center gap-2 rounded-2xl border border-red-400/10 bg-red-500/10 px-4 py-3 text-sm font-medium text-red-300 disabled:opacity-60"
+                      >
+                        {isDeletingTransaction ? (
+                          <Loader2 size={16} className="animate-spin" />
+                        ) : (
+                          <Trash2 size={16} />
+                        )}
+                        {isDeletingTransaction ? "Excluindo..." : "Excluir"}
+                      </button>
+                    </div>
                   </>
                 )}
               </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* MODAL TORNAR RECORRENTE */}
+      <AnimatePresence>
+        {showMakeRecurrentModal && selectedTransaction && (
+          <motion.div
+            className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 px-5 backdrop-blur-sm"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() =>
+              !isSavingRecurrent && setShowMakeRecurrentModal(false)
+            }
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.96 }}
+              transition={{ duration: 0.22 }}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-[430px] rounded-[2rem] border border-viggaGold/10 bg-viggaCard p-5 shadow-2xl"
+            >
+              {recurrentSuccess ? (
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  className="py-6 text-center"
+                >
+                  <CheckCircle2
+                    size={48}
+                    className="mx-auto mb-3 text-viggaGreen"
+                  />
+                  <h2 className="text-xl font-semibold text-viggaText">
+                    Recorrência criada!
+                  </h2>
+                  <p className="mt-2 text-sm text-viggaMuted">
+                    O próximo vencimento foi gerado em Vencimentos.
+                  </p>
+                </motion.div>
+              ) : (
+                <>
+                  <div className="mb-5 flex items-start justify-between gap-4">
+                    <div>
+                      <p className={ui.eyebrow}>Tornar recorrente</p>
+                      <h2 className="mt-1 text-xl font-semibold text-viggaText">
+                        {selectedTransaction.description}
+                      </h2>
+                      <p className="mt-1 text-sm text-viggaMuted">
+                        {formatCurrency(selectedTransaction.amount)} por mês
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowMakeRecurrentModal(false)}
+                      className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-viggaGold/10 bg-black/20 text-viggaMuted"
+                    >
+                      <X size={18} />
+                    </button>
+                  </div>
+
+                  {/* Dia do mês */}
+                  <div className="mb-4">
+                    <p className="mb-2 text-sm text-viggaMuted">
+                      Todo dia do mês
+                    </p>
+                    <input
+                      type="number"
+                      min="1"
+                      max="31"
+                      value={recurrentDayOfMonth}
+                      onChange={(e) => setRecurrentDayOfMonth(e.target.value)}
+                      placeholder="Ex: 15"
+                      className="w-full rounded-2xl border border-viggaGold/10 bg-black/20 px-4 py-3 text-center text-2xl font-bold text-viggaGold outline-none placeholder:text-viggaMuted"
+                    />
+                    <p className="mt-1 text-xs text-viggaMuted text-center">
+                      O próximo vencimento será gerado neste dia
+                    </p>
+                  </div>
+
+                  {/* Forma de pagamento */}
+                  <div className="mb-5">
+                    <p className="mb-2 text-sm text-viggaMuted">
+                      Forma de pagamento recorrente
+                    </p>
+                    <div className="flex gap-2">
+                      {["Pix", "Crédito", "Dinheiro", "Boleto"].map(
+                        (method) => (
+                          <button
+                            key={method}
+                            type="button"
+                            onClick={() => setRecurrentPaymentMethod(method)}
+                            className={`flex-1 rounded-2xl py-2.5 text-xs font-medium transition-colors ${recurrentPaymentMethod === method ? "bg-viggaGold text-black" : "border border-viggaGold/10 bg-black/20 text-viggaMuted"}`}
+                          >
+                            {method}
+                          </button>
+                        ),
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setShowMakeRecurrentModal(false)}
+                      className="rounded-2xl border border-viggaGold/10 bg-viggaBrown py-3 text-sm font-medium text-viggaGold"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleMakeRecurrent}
+                      disabled={isSavingRecurrent || !recurrentDayOfMonth}
+                      className="flex items-center justify-center gap-2 rounded-2xl bg-viggaGold py-3 text-sm font-medium text-black disabled:opacity-60"
+                    >
+                      {isSavingRecurrent ? (
+                        <Loader2 size={16} className="animate-spin" />
+                      ) : (
+                        <CalendarClock size={16} />
+                      )}
+                      {isSavingRecurrent ? "Criando..." : "Confirmar"}
+                    </button>
+                  </div>
+                </>
+              )}
             </motion.div>
           </motion.div>
         )}
