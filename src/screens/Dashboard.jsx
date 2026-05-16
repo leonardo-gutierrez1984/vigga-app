@@ -53,7 +53,7 @@ function formatDate(dateStr) {
 }
 
 function Dashboard() {
-  const { userName, householdId } = useAuth();
+  const { userName, householdId, userId } = useAuth();
   const navigate = useNavigate();
   const [transactions, setTransactions] = useState([]);
   const [bills, setBills] = useState([]);
@@ -218,9 +218,20 @@ function Dashboard() {
     try {
       setIsQuickSaving(true);
       const parsed = parseLaunchText(quickInput);
-      await supabase
+      const { detectedDate, ...launchData } = parsed;
+      const { data, error } = await supabase
         .from("transactions")
-        .insert([{ ...parsed, household_id: householdId }]);
+        .insert([
+          { ...launchData, household_id: householdId, user_id: userId },
+        ])
+        .select();
+      if (error) {
+        console.error("Erro ao lançar:", error);
+        return;
+      }
+      if (data?.[0]) {
+        setTransactions((prev) => [data[0], ...prev]);
+      }
       setQuickInput("");
       setQuickSaved(true);
       await fetchData();
